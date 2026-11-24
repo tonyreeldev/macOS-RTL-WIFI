@@ -117,7 +117,11 @@ done
 
 # Ad-hoc sign so Gatekeeper/amfid accept the binary locally. Optional:
 # unsigned binaries also load, but signing costs nothing here.
-codesign --force --sign - "$BUNDLE" 2>/dev/null || echo "[app] codesign unavailable - skipped"
+# mejoras-optiplex: sign with the fixed local certificate when it exists, so
+# the Keychain ACL for saved Wi-Fi passwords survives rebuilds; else ad-hoc.
+SIGN_ID="$(security find-identity -p codesigning 2>/dev/null | awk '/"RTLWiFiBar Local Signing"/ {print $2; exit}')"
+codesign --force --sign "${SIGN_ID:--}" "$BUNDLE" 2>/dev/null || echo "[app] codesign unavailable - skipped"
+echo "[app] signed with: ${SIGN_ID:-ad-hoc}"
 
 echo "[app] built: $BUNDLE"
 ls -la "$BUNDLE/Contents/MacOS/$APP_NAME"

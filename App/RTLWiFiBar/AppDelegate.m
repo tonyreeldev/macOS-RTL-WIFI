@@ -2455,7 +2455,7 @@ static BOOL rtlPrintableSsidEqual(NSString *a, NSString *b) {
 - (nullable NSString *)promptPassphrase:(NSString *)ssid {
     NSAlert *alert = [[NSAlert alloc] init];
     alert.messageText = [NSString stringWithFormat:NSLocalizedString(@"Password for \"%@\"", nil), ssid];
-    alert.informativeText = NSLocalizedString(@"Enter the router password to establish the connection. The network is remembered in this app's own profile file (~/Library/Application Support/RTLWiFiBar/Profiles.plist - never the macOS Keychain) and the app reconnects to it by itself after a restart; use Forget in the menu to remove it.", nil);
+    alert.informativeText = NSLocalizedString(@"Enter the router password to establish the connection. The password is stored in the macOS Keychain and the app reconnects to this network by itself after a restart; use Forget in the menu to remove it.", nil);
     alert.alertStyle = NSAlertStyleInformational;
     [alert addButtonWithTitle:NSLocalizedString(@"Join", nil)];
     [alert addButtonWithTitle:NSLocalizedString(@"Cancel", nil)];

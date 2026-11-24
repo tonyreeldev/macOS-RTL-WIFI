@@ -56,3 +56,4 @@
 "Connected to" = "Conectado a";
 "Pause Wi-Fi while a cable is connected" = "Pausar Wi-Fi con cable conectado";
 "Wi-Fi paused - cable connected" = "Wi-Fi en pausa: hay cable conectado";
+"Enter the router password to establish the connection. The password is stored in the macOS Keychain and the app reconnects to this network by itself after a restart; use Forget in the menu to remove it." = "Escriba la contraseña del router para conectarse. La contraseña se guarda en el Llavero de macOS y la app se reconecta sola a esta red después de reiniciar; use Olvidar en el menú para quitarla.";

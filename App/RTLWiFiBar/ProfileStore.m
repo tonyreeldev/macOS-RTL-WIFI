@@ -11,6 +11,7 @@
  */
 #import "ProfileStore.h"
 #import "RTWLog.h"
+#import <Security/Security.h>
 
 /* Relative to the user's home: ~/Library/Application Support/RTLWiFiBar/ */
 static NSString * const kStoreRelativePath =
@@ -26,6 +27,55 @@ static NSString * const kRememberedKey = @"remembered";
  * target). Profiles written by older builds have no stamp and sort
  * behind stamped ones. */
 static NSString * const kLastUsedKey = @"lastUsed";
+/* mejoras-optiplex: the passphrase lives in the login Keychain; the plist
+ * only keeps kc = YES. The app is signed with a fixed local certificate
+ * ("RTLWiFiBar Local Signing"), so the Keychain ACL survives rebuilds.
+ * If the Keychain refuses, the old obfuscated plist field is the fallback. */
+static NSString * const kKeychainFlagKey = @"kc";
+static NSString * const kKeychainService = @"com.rtlwifi.RTLWiFiBar.wifi";
+
+#pragma mark Keychain (mejoras-optiplex)
+
+static NSMutableDictionary *RTWKCQuery(NSString *ssid) {
+    return [@{ (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
+               (__bridge id)kSecAttrService: kKeychainService,
+               (__bridge id)kSecAttrAccount: ssid } mutableCopy];
+}
+
+static BOOL RTWKCWrite(NSString *ssid, NSString *pass) {
+    NSData *data = [pass dataUsingEncoding:NSUTF8StringEncoding];
+    if (!ssid.length || !data.length) return NO;
+    NSMutableDictionary *q = RTWKCQuery(ssid);
+    OSStatus st = SecItemUpdate((__bridge CFDictionaryRef)q,
+        (__bridge CFDictionaryRef)@{ (__bridge id)kSecValueData: data });
+    if (st == errSecItemNotFound) {
+        q[(__bridge id)kSecValueData] = data;
+        q[(__bridge id)kSecAttrLabel] = [NSString stringWithFormat:@"RTLWiFiBar: %@", ssid];
+        st = SecItemAdd((__bridge CFDictionaryRef)q, NULL);
+    }
+    if (st != errSecSuccess) RTWLog(@"keychain write for %@ failed (%d)", ssid, (int)st);
+    return st == errSecSuccess;
+}
+
+static NSString *RTWKCRead(NSString *ssid) {
+    if (!ssid.length) return nil;
+    NSMutableDictionary *q = RTWKCQuery(ssid);
+    q[(__bridge id)kSecReturnData] = @YES;
+    q[(__bridge id)kSecMatchLimit] = (__bridge id)kSecMatchLimitOne;
+    CFTypeRef out = NULL;
+    OSStatus st = SecItemCopyMatching((__bridge CFDictionaryRef)q, &out);
+    if (st != errSecSuccess || !out) {
+        if (st != errSecItemNotFound) RTWLog(@"keychain read for %@ failed (%d)", ssid, (int)st);
+        return nil;
+    }
+    NSData *data = (__bridge_transfer NSData *)out;
+    return [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+}
+
+static void RTWKCDelete(NSString *ssid) {
+    if (!ssid.length) return;
+    SecItemDelete((__bridge CFDictionaryRef)RTWKCQuery(ssid));
+}
 
 #pragma mark Obfuscation (obscure, NOT encryption)
 
@@ -70,13 +120,16 @@ static NSString *RTWDecodePassphrase(NSString *encoded) {
 
 @implementation RTWProfileStore {
     NSMutableDictionary<NSString *, NSDictionary *> *_networks;
+    NSMutableDictionary<NSString *, NSString *> *_passCache; /* one Keychain read per SSID */
 }
 
 - (instancetype)init {
     self = [super init];
     if (self) {
         _networks = [NSMutableDictionary dictionary];
+        _passCache = [NSMutableDictionary dictionary];
         [self loadStore];
+        [self migrateToKeychain];
     }
     return self;
 }
@@ -99,6 +152,28 @@ static NSString *RTWDecodePassphrase(NSString *encoded) {
             ![entry isKindOfClass:[NSDictionary class]]) continue;
         _networks[ssid] = entry;
     }
+}
+
+/* mejoras-optiplex: move every obfuscated plist passphrase into the
+ * Keychain once; the plist field is removed only after a good write. */
+- (void)migrateToKeychain {
+    BOOL changed = NO;
+    for (NSString *ssid in [_networks allKeys]) {
+        NSDictionary *entry = _networks[ssid];
+        NSString *encoded = entry[kPassKey];
+        if (![encoded isKindOfClass:[NSString class]] || !encoded.length) continue;
+        NSString *pass = RTWDecodePassphrase(encoded);
+        if (!pass.length) continue;
+        if (!RTWKCWrite(ssid, pass)) continue;
+        NSMutableDictionary *m = [entry mutableCopy];
+        [m removeObjectForKey:kPassKey];
+        m[kKeychainFlagKey] = @YES;
+        _networks[ssid] = m;
+        _passCache[ssid] = pass;
+        changed = YES;
+        RTWLog(@"password for %@ moved to the Keychain", ssid);
+    }
+    if (changed) [self persistStore];
 }
 
 - (void)persistStore {
@@ -134,6 +209,14 @@ static NSString *RTWDecodePassphrase(NSString *encoded) {
 
 - (nullable NSString *)passphraseForSsid:(NSString *)ssid {
     NSDictionary *entry = [self profileForSsid:ssid];
+    if (!entry) return nil;
+    NSString *cached = _passCache[ssid];
+    if (cached.length) return cached;
+    if ([entry[kKeychainFlagKey] boolValue]) {
+        NSString *kc = RTWKCRead(ssid);
+        if (kc.length) _passCache[ssid] = kc;
+        return kc.length ? kc : nil;
+    }
     NSString *encoded = entry[kPassKey];
     if (![encoded isKindOfClass:[NSString class]]) return nil;
     NSString *pass = RTWDecodePassphrase(encoded);
@@ -164,7 +247,14 @@ static NSString *RTWDecodePassphrase(NSString *encoded) {
                 channel:(uint32_t)channel {
     if (!ssid.length) return NO;
     NSMutableDictionary *entry = [NSMutableDictionary dictionary];
-    entry[kPassKey] = RTWEncodePassphrase(passphrase ?: @"");
+    [_passCache removeObjectForKey:ssid];
+    if (passphrase.length && RTWKCWrite(ssid, passphrase)) {
+        entry[kKeychainFlagKey] = @YES;          /* mejoras-optiplex */
+        _passCache[ssid] = passphrase;
+    } else {
+        if (!passphrase.length) RTWKCDelete(ssid); /* open network: no stale key */
+        entry[kPassKey] = RTWEncodePassphrase(passphrase ?: @"");
+    }
     entry[kAuthKey] = @((unsigned)authMode);
     entry[kChanKey] = @((unsigned)channel);
     entry[kRememberedKey] = @YES;
@@ -199,6 +289,8 @@ static NSString *RTWDecodePassphrase(NSString *encoded) {
 - (BOOL)forgetSsid:(NSString *)ssid {
     if (!ssid.length) return YES;
     if (!_networks[ssid]) return YES;
+    RTWKCDelete(ssid);                           /* mejoras-optiplex */
+    [_passCache removeObjectForKey:ssid];
     [_networks removeObjectForKey:ssid];
     [self persistStore];
     RTWLog(@"forgot profile %@", ssid);
@@ -206,6 +298,8 @@ static NSString *RTWDecodePassphrase(NSString *encoded) {
 }
 
 - (void)resetAllProfiles {
+    for (NSString *ssid in [_networks allKeys]) RTWKCDelete(ssid); /* mejoras-optiplex */
+    [_passCache removeAllObjects];
     [_networks removeAllObjects];
     NSString *path = [self storePath];
     NSFileManager *fm = [NSFileManager defaultManager];
