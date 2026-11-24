@@ -46,3 +46,13 @@
 "Disconnect needs the updated driver - reinstall the kext" = "Disconnect needs the updated driver - reinstall the kext";
 "Could not join \"%@\"" = "Could not join \"%@\"";
 "The saved password was not accepted. If the password changed (a phone hotspot or a new router key), type the new one in the next window." = "The saved password was not accepted. If the password changed (a phone hotspot or a new router key), type the new one in the next window.";
+"open" = "open";
+"good signal" = "good signal";
+"fair signal" = "fair signal";
+"weak signal" = "weak signal";
+"other access point" = "other access point";
+"Disconnect from \"%@\"" = "Disconnect from \"%@\"";
+"Reconnect to \"%@\"" = "Reconnect to \"%@\"";
+"Connected to" = "Connected to";
+"Pause Wi-Fi while a cable is connected" = "Pause Wi-Fi while a cable is connected";
+"Wi-Fi paused - cable connected" = "Wi-Fi paused - cable connected";

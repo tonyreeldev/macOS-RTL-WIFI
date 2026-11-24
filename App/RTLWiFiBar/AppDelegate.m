@@ -87,6 +87,11 @@
 #import "SignalIcon.h"
 #import <unistd.h>
 #import <math.h>
+#import <SystemConfiguration/SystemConfiguration.h>
+#import <ifaddrs.h>
+#import <net/if.h>
+#import <netinet/in.h>
+#import <arpa/inet.h>
 
 /* Menu item tags keep the snapshot -> action mapping stable. */
 static NSInteger const kTagStatusLine = 1;
@@ -110,6 +115,46 @@ static NSInteger const kTagQuit = 15;
  * re-pinned at launch); the key stays declared only so the launch wipe
  * (and Forget) can clear leftovers from older builds. */
 static NSString * const kDefaultsActiveSsid = @"RTWActiveSsid";
+/* mejoras-optiplex: "pause Wi-Fi while a cable is connected" (off by default:
+ * some users need both connections up at the same time). */
+static NSString * const kDefaultsPauseWithCable = @"RTWPauseWifiWithCable";
+
+/* mejoras-optiplex: YES when a wired Ethernet interface (other than the
+ * dongle) is up with a routable IPv4 address. Wired = SystemConfiguration
+ * type Ethernet, which excludes built-in Wi-Fi, bridges and VPN tunnels. */
+static BOOL rtlWiredEthernetUp(NSString *dongleIfname, NSString **wiredName) {
+    NSMutableSet<NSString *> *wired = [NSMutableSet set];
+    CFArrayRef all = SCNetworkInterfaceCopyAll();
+    if (all) {
+        for (CFIndex i = 0; i < CFArrayGetCount(all); i++) {
+            SCNetworkInterfaceRef itf = (SCNetworkInterfaceRef)CFArrayGetValueAtIndex(all, i);
+            CFStringRef type = SCNetworkInterfaceGetInterfaceType(itf);
+            CFStringRef bsd = SCNetworkInterfaceGetBSDName(itf);
+            if (type && bsd && CFEqual(type, kSCNetworkInterfaceTypeEthernet)) {
+                [wired addObject:(__bridge NSString *)bsd];
+            }
+        }
+        CFRelease(all);
+    }
+    if (dongleIfname.length) [wired removeObject:dongleIfname];
+    if (!wired.count) return NO;
+    struct ifaddrs *list = NULL;
+    if (getifaddrs(&list) != 0 || !list) return NO;
+    BOOL found = NO;
+    for (struct ifaddrs *a = list; a; a = a->ifa_next) {
+        if (!a->ifa_addr || a->ifa_addr->sa_family != AF_INET || !a->ifa_name) continue;
+        if ((a->ifa_flags & (IFF_UP | IFF_RUNNING)) != (IFF_UP | IFF_RUNNING)) continue;
+        NSString *name = [NSString stringWithUTF8String:a->ifa_name];
+        if (![wired containsObject:name]) continue;
+        uint32_t ip = ntohl(((struct sockaddr_in *)a->ifa_addr)->sin_addr.s_addr);
+        if ((ip >> 16) == 0xA9FE) continue; /* 169.254.x.x self-assigned */
+        if (wiredName) *wiredName = name;
+        found = YES;
+        break;
+    }
+    freeifaddrs(list);
+    return found;
+}
 /* v8.7.19: seconds the dongle must have been reachable before the startup /
  * post-rescue auto-rejoin may submit. Field logs 2026-11-20: a dual-band
  * (802.11ac) dongle joined fine when the user picked the network ~40 s after
@@ -189,6 +234,19 @@ static BOOL rtlPrintableSsidEqual(NSString *a, NSString *b) {
 @end
 
 @interface AppDelegate () <NSMenuDelegate>
+/* mejoras-optiplex: AP currently linked, for the network list. */
+@property (nonatomic, copy, nullable) NSString *listLinkedSsid;
+@property (nonatomic, strong, nullable) RTWNetworkEntry *listLinkedEntry;
+/* mejoras-optiplex: network being switched to (leave-then-join in flight). */
+@property (nonatomic, copy, nullable) NSString *switchingToSsid;
+/* mejoras-optiplex: network to go back to after a full sweep while linked. */
+@property (nonatomic, copy, nullable) NSString *scanDetourSsid;
+/* mejoras-optiplex: Wi-Fi paused because a cable is connected. */
+@property (nonatomic, assign) BOOL cablePaused;
+@property (nonatomic, copy, nullable) NSString *cablePausedSsid;
+@property (nonatomic, assign) BOOL cableOverride;     /* user joined anyway; until the cable goes */
+@property (nonatomic, assign) NSInteger cableGoneTicks;
+@property (nonatomic, strong, nullable) NSTimer *cableTimer;
 @property (strong) RTWDriverClient *driver;
 @property (strong) RTWProfileStore *profiles;   /* app-owned plist, no Keychain */
 @property (strong) NSStatusItem *statusItem;
@@ -417,6 +475,9 @@ static BOOL rtlPrintableSsidEqual(NSString *a, NSString *b) {
     }
 
     [self startPollTimer];
+    /* mejoras-optiplex: cable watch every 3 s (main thread). */
+    self.cableTimer = [NSTimer scheduledTimerWithTimeInterval:3.0 target:self
+        selector:@selector(cableWatchTick:) userInfo:nil repeats:YES];
     /* One site survey at launch so the first menu open has content. */
     dispatch_async(self.workQueue, ^{ [self performScan]; });
 }
@@ -1053,6 +1114,7 @@ static BOOL rtlPrintableSsidEqual(NSString *a, NSString *b) {
  *    it (armAutoRejoinAfterDrop:, max 6 per rolling hour); 8.8.5: flaps too. */
 - (void)maybeFireStartupAutoRejoinWithRecords:(NSArray<RTWNetworkEntry *> *)records {
     if (self.userDisconnected) return; /* 8.8.5: never rejoin after Disconnect USB WiFi */
+    if (self.cablePaused) return;      /* mejoras-optiplex: Wi-Fi paused, cable connected */
     NSString *ssid = self.autoRejoinArmedSsid;
     if (!ssid.length) return;
     if (![self.profiles hasProfileForSsid:ssid]) {
@@ -1250,6 +1312,9 @@ static BOOL rtlPrintableSsidEqual(NSString *a, NSString *b) {
  * turns this into a join loop. 8.8.5: flaps (link up under 30 s) use it too. */
 - (void)armAutoRejoinAfterDrop:(NSTimeInterval)now {
     if (self.userDisconnected) return; /* 8.8.5: the user disconnected on purpose */
+    if (self.switchingToSsid.length) return; /* mejoras-optiplex: leaving on purpose to switch */
+    if (self.scanDetourSsid.length) return;  /* mejoras-optiplex: left for a full sweep */
+    if (self.cablePaused) return;            /* mejoras-optiplex: paused while the cable is in */
     if (self.autoRejoinArmedSsid.length || self.joinInFlightSsid.length) return;
     NSString *ssid = [self.profiles mostRecentlyUsedSsid];
     if (!ssid.length || ![self.profiles hasProfileForSsid:ssid]) return;
@@ -1379,9 +1444,19 @@ static BOOL rtlPrintableSsidEqual(NSString *a, NSString *b) {
 
     /* 0. 8.8.5: Disconnect / Reconnect USB WiFi on top, like the stock
      *    Realtek StatusBarApp. Clickable while the dongle is reachable. */
-    NSMenuItem *usbToggle = [[NSMenuItem alloc] initWithTitle:
-        (self.userDisconnected ? NSLocalizedString(@"Reconnect USB WiFi", nil)
-                               : NSLocalizedString(@"Disconnect USB WiFi", nil))
+    /* mejoras-optiplex: name the network, so it reads as "disconnect from
+     * this network" (same action: leave and stay off until you pick one). */
+    NSString *toggleTitle;
+    if (self.userDisconnected) {
+        toggleTitle = self.savedSsid.length
+            ? [NSString stringWithFormat:NSLocalizedString(@"Reconnect to \"%@\"", nil), self.savedSsid]
+            : NSLocalizedString(@"Reconnect USB WiFi", nil);
+    } else {
+        toggleTitle = (status.linked && status.ssid.length)
+            ? [NSString stringWithFormat:NSLocalizedString(@"Disconnect from \"%@\"", nil), status.ssid]
+            : NSLocalizedString(@"Disconnect USB WiFi", nil);
+    }
+    NSMenuItem *usbToggle = [[NSMenuItem alloc] initWithTitle:toggleTitle
         action:@selector(toggleUSBWifi:) keyEquivalent:@""];
     usbToggle.target = self;
     usbToggle.enabled = (status != nil && status.driverReachable);
@@ -1393,6 +1468,11 @@ static BOOL rtlPrintableSsidEqual(NSString *a, NSString *b) {
                                                         action:nil keyEquivalent:@""];
     statusItem.tag = kTagStatusLine;
     statusItem.enabled = NO;
+    /* mejoras-optiplex: while connected, a clear two-line block instead of
+     * the dimmed status text: "Connected to <network>" + band, signal, IP. */
+    if (status.driverReachable && status.linked && !self.userDisconnected) {
+        statusItem.view = [self connectedStatusViewForStatus:status];
+    }
     [menu addItem:statusItem];
     if (!status || !status.driverReachable) {
         NSMenuItem *detailItem = [[NSMenuItem alloc] initWithTitle:[self statusDetailLine:status]
@@ -1433,6 +1513,14 @@ static BOOL rtlPrintableSsidEqual(NSString *a, NSString *b) {
     rescan.tag = kTagRescan;
     rescan.enabled = YES;
     [menu addItem:rescan];
+
+    NSMenuItem *pauseCable = [[NSMenuItem alloc] initWithTitle:
+        NSLocalizedString(@"Pause Wi-Fi while a cable is connected", nil)
+        action:@selector(togglePauseWithCable:) keyEquivalent:@""];
+    pauseCable.target = self;
+    pauseCable.state = [[NSUserDefaults standardUserDefaults] boolForKey:kDefaultsPauseWithCable]
+        ? NSControlStateValueOn : NSControlStateValueOff;
+    [menu addItem:pauseCable];
 
     /* v8.7.17: profiles persist across restarts now, so the saved network
      * is pinned again at launch and reconnects by itself (one bounded
@@ -1567,6 +1655,22 @@ static BOOL rtlPrintableSsidEqual(NSString *a, NSString *b) {
 
     /* Size the pinned row so its right-edge lock lines up with the rest of
      * the collapsed menu. */
+    /* mejoras-optiplex: while linked, hide only the scan record of the AP
+     * we are on (same SSID + same channel); the network's other APs stay in
+     * the list as information. The driver joins by SSID only, so they are
+     * not clickable yet. */
+    RTWNetworkEntry *linkedEntry = nil;
+    if (status.linked && activeSsid) {
+        for (RTWNetworkEntry *e in sorted) {
+            if (rtlPrintableSsidEqual(e.ssid, activeSsid) && e.channel == status.channel) {
+                linkedEntry = e;
+                break;
+            }
+        }
+    }
+    self.listLinkedSsid = (status.linked && activeSsid) ? activeSsid : nil;
+    self.listLinkedEntry = linkedEntry;
+
     CGFloat rowWidth = [self submenuRowWidthForTitles:
         [self titlesForSubmenuRows:sorted excluding:activeSsid fallbackTitle:activeTitle]];
 
@@ -1583,18 +1687,19 @@ static BOOL rtlPrintableSsidEqual(NSString *a, NSString *b) {
 
     NSInteger shown = 0;
     for (RTWNetworkEntry *entry in sorted) {
-        if (activeSsid && rtlPrintableSsidEqual(entry.ssid, activeSsid)) continue;
+        if ([self isHiddenFromList:entry activeSsid:activeSsid]) continue;
         /* v8.7.10: 15 hid real APs - the 8.7.9 field scan saw 18 networks
          * and the user could not reach theirs in the list. macOS scrolls a
          * long submenu; 40 keeps every scan result clickable. */
         if (shown >= 40) break;
-        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:[self titleForEntry:entry]
-                                                      action:@selector(joinFromMenu:)
+        BOOL sibling = [self isSiblingAccessPoint:entry];
+        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:[self listTitleForEntry:entry]
+                                                      action:sibling ? nil : @selector(joinFromMenu:)
                                                keyEquivalent:@""];
         item.target = self;
         item.tag = kTagNetworkBase + shown;
         item.representedObject = entry;
-        item.enabled = entry.joinable;
+        item.enabled = entry.joinable && !sibling;
         [subnet addItem:item];
         shown++;
     }
@@ -1608,6 +1713,25 @@ static BOOL rtlPrintableSsidEqual(NSString *a, NSString *b) {
     }
 }
 
+/* mejoras-optiplex: list filtering. Not linked: every record of the pinned
+ * SSID is hidden (unchanged behavior). Linked: only the AP we are on. */
+- (BOOL)isHiddenFromList:(RTWNetworkEntry *)entry activeSsid:(nullable NSString *)activeSsid {
+    if (!activeSsid || !rtlPrintableSsidEqual(entry.ssid, activeSsid)) return NO;
+    if (!self.listLinkedSsid) return YES;
+    return entry == self.listLinkedEntry;
+}
+
+- (BOOL)isSiblingAccessPoint:(RTWNetworkEntry *)entry {
+    return self.listLinkedSsid && entry != self.listLinkedEntry
+        && rtlPrintableSsidEqual(entry.ssid, self.listLinkedSsid);
+}
+
+- (NSString *)listTitleForEntry:(RTWNetworkEntry *)entry {
+    NSString *title = [self titleForEntry:entry];
+    if (![self isSiblingAccessPoint:entry]) return title;
+    return [NSString stringWithFormat:@"%@  ·  %@", title, NSLocalizedString(@"other access point", nil)];
+}
+
 - (NSArray<NSString *> *)titlesForSubmenuRows:(NSArray<RTWNetworkEntry *> *)entries
                                     excluding:(NSString *)activeSsid
                                 fallbackTitle:(NSString *)fallback {
@@ -1615,9 +1739,9 @@ static BOOL rtlPrintableSsidEqual(NSString *a, NSString *b) {
     if (fallback.length) [titles addObject:fallback];
     NSInteger shown = 0;
     for (RTWNetworkEntry *entry in entries) {
-        if (activeSsid && rtlPrintableSsidEqual(entry.ssid, activeSsid)) continue;
+        if ([self isHiddenFromList:entry activeSsid:activeSsid]) continue;
         if (shown >= 40) break; /* v8.7.10: width parity with the list cap */
-        [titles addObject:[self titleForEntry:entry]];
+        [titles addObject:[self listTitleForEntry:entry]];
         shown++;
     }
     return titles;
@@ -1638,8 +1762,10 @@ static BOOL rtlPrintableSsidEqual(NSString *a, NSString *b) {
 - (NSString *)activeRowTitleForSsid:(NSString *)ssid
                              status:(nullable RTWDriverStatus *)status {
     if (status.linked && rtlPrintableSsidEqual(status.ssid, ssid)) {
-        return [NSString stringWithFormat:NSLocalizedString(@"%@ - %d dBm, ch %u", nil),
-                ssid, status.rssiPercent / 2 - 100, (unsigned)status.channel];
+        /* mejoras-optiplex: same short text as the list. */
+        return [NSString stringWithFormat:@"%@  ·  %@  ·  %@", ssid,
+                [self bandForChannel:status.channel],
+                [self signalWordForDbm:status.rssiPercent / 2 - 100]];
     }
     /* "saved" only when a remembered profile exists; a merely selected
      * network reads "selected" so it never masquerades as saved. */
@@ -1667,7 +1793,15 @@ static BOOL rtlPrintableSsidEqual(NSString *a, NSString *b) {
     NSView *row = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, width, 22)];
 
     NSImageView *wifi = [[NSImageView alloc] initWithFrame:NSMakeRect(6, 3, 16, 16)];
-    wifi.image = [RTWSignalIcon menuWifiIcon];
+    /* mejoras-optiplex: the connected network reads like the native menu
+     * (accent-colored Wi-Fi glyph, normal label text) instead of a fixed
+     * grey that looks disabled. Not linked: secondary color. */
+    BOOL rowLinked = status.linked && rtlPrintableSsidEqual(status.ssid, ssid);
+    wifi.image = [RTWSignalIcon menuWifiTemplateIcon];
+    if (@available(macOS 10.14, *)) {
+        wifi.contentTintColor = rowLinked ? [NSColor controlAccentColor]
+                                          : [NSColor secondaryLabelColor];
+    }
     [row addSubview:wifi];
 
     /* Hand-built label: the AppKit class factory
@@ -1686,10 +1820,14 @@ static BOOL rtlPrintableSsidEqual(NSString *a, NSString *b) {
     label.lineBreakMode = NSLineBreakByTruncatingTail;
     label.usesSingleLineMode = YES;
     label.font = [NSFont menuFontOfSize:13];
+    label.textColor = rowLinked ? [NSColor labelColor] : [NSColor secondaryLabelColor];
     [row addSubview:label];
 
     NSImageView *lock = [[NSImageView alloc] initWithFrame:NSMakeRect(width - 22, 3, 16, 16)];
-    if (locked) lock.image = [RTWSignalIcon menuLockIcon];
+    if (locked) {
+        lock.image = [RTWSignalIcon menuLockTemplateIcon];
+        if (@available(macOS 10.14, *)) lock.contentTintColor = [NSColor labelColor];
+    }
     [row addSubview:lock];
 
     return row;
@@ -1704,6 +1842,7 @@ static BOOL rtlPrintableSsidEqual(NSString *a, NSString *b) {
         return NSLocalizedString(@"Dongle: Unplugged", nil);
     }
     if (self.userDisconnected) return NSLocalizedString(@"USB WiFi disconnected", nil); /* 8.8.5 */
+    if (self.cablePaused) return NSLocalizedString(@"Wi-Fi paused - cable connected", nil);
     if (self.scanning && !status.linked) return NSLocalizedString(@"Scanning…", nil);
     if (status.linked) {
         return [NSString stringWithFormat:NSLocalizedString(@"%@ - %d dBm, channel %u", nil),
@@ -1740,6 +1879,114 @@ static BOOL rtlPrintableSsidEqual(NSString *a, NSString *b) {
     return NSLocalizedString(@"Dongle ready - not connected", nil);
 }
 
+#pragma mark Cable watch (mejoras-optiplex)
+
+- (void)togglePauseWithCable:(nullable NSMenuItem *)sender {
+    (void)sender;
+    NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
+    BOOL on = ![d boolForKey:kDefaultsPauseWithCable];
+    [d setBool:on forKey:kDefaultsPauseWithCable];
+    self.cableOverride = NO;
+    RTWLog(@"pause Wi-Fi while a cable is connected: %@", on ? @"ON" : @"OFF");
+    [self cableWatchTick:nil];
+}
+
+- (void)cableWatchTick:(nullable NSTimer *)timer {
+    (void)timer;
+    @try {
+        BOOL enabled = [[NSUserDefaults standardUserDefaults] boolForKey:kDefaultsPauseWithCable];
+        if (!enabled) {
+            if (self.cablePaused) [self resumeFromCablePause:@"the option was turned off"];
+            return;
+        }
+        [self.stateLock lock];
+        RTWDriverStatus *status = self.lastStatus;
+        [self.stateLock unlock];
+        if (!status.driverReachable) return;
+
+        NSString *dongle = nil;
+        [self.driver interfaceIPv4:&dongle];
+        NSString *wiredName = nil;
+        BOOL cable = rtlWiredEthernetUp(dongle, &wiredName);
+
+        if (cable) {
+            self.cableGoneTicks = 0;
+            if (self.cablePaused || self.cableOverride || self.userDisconnected) return;
+            if (self.joinInFlightSsid.length || self.scanDetourSsid.length ||
+                self.switchingToSsid.length) return; /* let a running join finish */
+            NSString *ssid = status.linked && status.ssid.length ? status.ssid : self.savedSsid;
+            self.cablePaused = YES;
+            self.cablePausedSsid = ssid;
+            [self standDownStartupAutoRejoin:@"Wi-Fi paused - cable connected"];
+            if (status.linked) {
+                NSString *detail = nil;
+                BOOL ok = [self.driver disconnectFromNetwork:&detail];
+                RTWLog(@"cable on %@ - pausing Wi-Fi (left \"%@\": %@)", wiredName ?: @"?",
+                       ssid ?: @"?", ok ? @"ok" : (detail ?: @"failed"));
+            } else {
+                RTWLog(@"cable on %@ - Wi-Fi paused (was not linked)", wiredName ?: @"?");
+            }
+        } else {
+            self.cableOverride = NO;
+            if (!self.cablePaused) return;
+            if (++self.cableGoneTicks < 2) return; /* ~6 s without cable: not a blip */
+            [self resumeFromCablePause:@"cable unplugged"];
+        }
+    } @catch (NSException *exception) {
+        RTWLog(@"cable watch exception contained: %@ (%@)", exception.name, exception.reason);
+    }
+}
+
+- (void)resumeFromCablePause:(NSString *)reason {
+    NSString *ssid = self.cablePausedSsid;
+    self.cablePaused = NO;
+    self.cablePausedSsid = nil;
+    self.cableGoneTicks = 0;
+    RTWLog(@"Wi-Fi resumed - %@", reason);
+    if (self.userDisconnected || !ssid.length || ![self.profiles hasProfileForSsid:ssid]) return;
+    self.savedSsid = ssid;
+    [self rejoinSavedNow:nil];
+}
+
+- (NSView *)connectedStatusViewForStatus:(RTWDriverStatus *)status {
+    const CGFloat width = 300.0;
+    NSView *view = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, width, 40)];
+
+    NSImageView *wifi = [[NSImageView alloc] initWithFrame:NSMakeRect(14, 12, 18, 18)];
+    wifi.image = [RTWSignalIcon menuWifiTemplateIcon];
+    if (@available(macOS 10.14, *)) wifi.contentTintColor = [NSColor controlAccentColor];
+    [view addSubview:wifi];
+
+    NSString *name = status.ssid.length ? status.ssid : @"?";
+    NSString *prefix = NSLocalizedString(@"Connected to", nil);
+    NSFont *regular = [NSFont menuFontOfSize:13];
+    NSFont *bold = [NSFont boldSystemFontOfSize:13];
+    NSMutableAttributedString *line1 = [[NSMutableAttributedString alloc]
+        initWithString:[prefix stringByAppendingString:@" "]
+            attributes:@{NSFontAttributeName: regular, NSForegroundColorAttributeName: [NSColor labelColor]}];
+    [line1 appendAttributedString:[[NSAttributedString alloc] initWithString:name
+        attributes:@{NSFontAttributeName: bold, NSForegroundColorAttributeName: [NSColor labelColor]}]];
+
+    NSString *ip = [self.driver interfaceIPv4:NULL];
+    NSMutableString *detail = [NSMutableString stringWithFormat:@"%@  ·  %@",
+        [self bandForChannel:status.channel], [self signalWordForDbm:status.rssiPercent / 2 - 100]];
+    if (ip.length) [detail appendFormat:@"  ·  %@", ip];
+
+    NSArray *lines = @[line1, [[NSAttributedString alloc] initWithString:detail
+        attributes:@{NSFontAttributeName: [NSFont menuFontOfSize:11],
+                     NSForegroundColorAttributeName: [NSColor secondaryLabelColor]}]];
+    CGFloat ys[2] = {20, 4};
+    for (NSUInteger i = 0; i < 2; i++) {
+        NSTextField *f = [[NSTextField alloc] initWithFrame:NSMakeRect(38, ys[i], width - 38 - 12, 16)];
+        f.editable = NO; f.selectable = NO; f.bezeled = NO; f.bordered = NO;
+        f.drawsBackground = NO; f.usesSingleLineMode = YES;
+        f.lineBreakMode = NSLineBreakByTruncatingTail;
+        f.attributedStringValue = lines[i];
+        [view addSubview:f];
+    }
+    return view;
+}
+
 - (NSString *)statusDetailLine:(nullable RTWDriverStatus *)status {
     if (!status) return NSLocalizedString(@"Driver not reachable", nil);
     return status.lastError.length ? status.lastError : NSLocalizedString(@"Driver not reachable", nil);
@@ -1753,12 +2000,27 @@ static BOOL rtlPrintableSsidEqual(NSString *a, NSString *b) {
          * profiles persist across restarts, so ANY saved profile counts,
          * not just this session's active pick. */
         BOOL remembered = [self isKnownSsid:entry.ssid];
-        return [NSString stringWithFormat:@"%@  (%@, ch %u, %d dBm)%@",
-                name, entry.securityLabel, (unsigned)entry.channel,
-                entry.rssiDbm,
-                remembered ? @"  ✓" : @""];
+        /* mejoras-optiplex: short text - name · band · signal (· open) ✓ */
+        NSMutableString *t = [NSMutableString stringWithFormat:@"%@  ·  %@  ·  %@",
+                              name, [self bandForChannel:entry.channel],
+                              [self signalWordForDbm:entry.rssiDbm]];
+        if (!entry.needsPassphrase) [t appendFormat:@"  ·  %@", NSLocalizedString(@"open", nil)];
+        if (remembered) [t appendString:@"  ✓"];
+        return t;
     }
-    return [NSString stringWithFormat:@"%@  (%@)", name, entry.securityLabel];
+    return [NSString stringWithFormat:@"%@  ·  %@", name, entry.securityLabel];
+}
+
+/* mejoras-optiplex helpers for the short text format. */
+- (NSString *)bandForChannel:(uint32_t)channel {
+    if (channel == 0) return @"?";
+    return channel <= 14 ? @"2.4 GHz" : @"5 GHz";
+}
+
+- (NSString *)signalWordForDbm:(int32_t)dbm {
+    if (dbm >= -67) return NSLocalizedString(@"good signal", nil);
+    if (dbm >= -75) return NSLocalizedString(@"fair signal", nil);
+    return NSLocalizedString(@"weak signal", nil);
 }
 
 #pragma mark Actions
@@ -1832,6 +2094,42 @@ static BOOL rtlPrintableSsidEqual(NSString *a, NSString *b) {
 
 - (void)rescanNow:(nullable NSMenuItem *)sender {
     (void)sender;
+    /* mejoras-optiplex: while linked the kext never sweeps (a sweep would
+     * drop the link; it serves a cache that only holds the networks of the
+     * joined channel). On the user's click: leave for a moment, do a real
+     * sweep, then go back to the same network - unless the user picks
+     * another one from the fresh list first. */
+    [self.stateLock lock];
+    RTWDriverStatus *st = self.lastStatus;
+    [self.stateLock unlock];
+    if (st.driverReachable && st.linked && st.ssid.length && !self.userDisconnected &&
+        !self.joinInFlightSsid.length && !self.scanDetourSsid.length &&
+        [self.profiles hasProfileForSsid:st.ssid]) {
+        NSString *back = st.ssid;
+        self.scanDetourSsid = back;
+        [self standDownStartupAutoRejoin:@"full scan requested"];
+        RTWLog(@"rescan requested while linked to \"%@\" - leaving for a full sweep, then rejoining", back);
+        dispatch_async(self.workQueue, ^{
+            NSString *detail = nil;
+            BOOL left = [self.driver disconnectFromNetwork:&detail];
+            RTWLog(@"leave for full sweep -> %@%@", left ? @"ok" : @"failed",
+                   detail ? [NSString stringWithFormat:@" (%@)", detail] : @"");
+            [NSThread sleepForTimeInterval:1.5];
+            [self performScan];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self.menu update];
+                /* The user may already have picked another network (that
+                 * join clears scanDetourSsid). Otherwise go back. */
+                if (!rtlPrintableSsidEqual(self.scanDetourSsid, back)) return;
+                self.scanDetourSsid = nil;
+                if (self.userDisconnected) return; /* clicked Disconnect meanwhile */
+                self.savedSsid = back;
+                RTWLog(@"full sweep done - rejoining \"%@\"", back);
+                [self rejoinSavedNow:nil];
+            });
+        });
+        return;
+    }
     RTWLog(@"rescan requested");
     dispatch_async(self.workQueue, ^{
         if (![self.driver isConnected]) {
@@ -1923,6 +2221,35 @@ static BOOL rtlPrintableSsidEqual(NSString *a, NSString *b) {
      * the submit below is the user's own click (v8.7.13). */
     [self armPendingNetworkSaveForEntry:entry passphrase:pass];
     [self markActiveSsid:entry.ssid];
+
+    /* mejoras-optiplex: switching from a linked network to a different one.
+     * Joining on top of a live link did not always move (the user had to
+     * Forget or unplug/replug). Leave the current network first (kext 1.1.2
+     * disassociate OID), then join the new one 2 s later. The drop that the
+     * leave causes must not arm the auto-rejoin to the old network. */
+    [self.stateLock lock];
+    RTWDriverStatus *now = self.lastStatus;
+    [self.stateLock unlock];
+    if (now.linked && now.ssid.length && !rtlPrintableSsidEqual(now.ssid, entry.ssid)) {
+        RTWLog(@"switching from \"%@\" to \"%@\" - leaving the current network first",
+               now.ssid, entry.ssid);
+        self.switchingToSsid = entry.ssid;
+        [self standDownStartupAutoRejoin:@"you switched to another network"];
+        NSString *leaveDetail = nil;
+        BOOL left = [self.driver disconnectFromNetwork:&leaveDetail];
+        RTWLog(@"leave before switch -> %@%@", left ? @"ok" : @"failed",
+               leaveDetail ? [NSString stringWithFormat:@" (%@)", leaveDetail] : @"");
+        __weak typeof(self) weakSelf = self;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            typeof(self) s = weakSelf;
+            if (!s || !rtlPrintableSsidEqual(s.switchingToSsid, entry.ssid)) return;
+            [s submitJoin:entry passphrase:pass];
+            if (usedSavedPassword && s.joinInFlightSsid.length) s.joinWatchSavedPass = YES;
+        });
+        return;
+    }
+
     [self submitJoin:entry passphrase:pass];
     /* After submitJoin: it arms the join watch (and a rejected submit clears
      * it), so the flag only lives with a watch that is really running. */
@@ -2030,6 +2357,13 @@ static BOOL rtlPrintableSsidEqual(NSString *a, NSString *b) {
     /* 8.8.5: any join the user starts (a network picked in the menu, Rejoin,
      * Reconnect USB WiFi) ends the Disconnect state. */
     self.userDisconnected = NO;
+    self.switchingToSsid = nil; /* mejoras-optiplex: the switch is now a normal join */
+    self.scanDetourSsid = nil;  /* mejoras-optiplex: a join ends the full-sweep detour */
+    if (self.cablePaused) {     /* mejoras-optiplex: the user joins with the cable in - respect it */
+        self.cablePaused = NO;
+        self.cableOverride = YES;
+        RTWLog(@"join while paused for the cable - Wi-Fi stays on until the cable is unplugged");
+    }
     /* v8.7.13: the 20 s "driver settle" gate is REVERTED - it was the
      * timer fix the user rejected. The kext now restarts its station and
      * clears a halted RX pipe on every join request (driver 1.0.7), so a

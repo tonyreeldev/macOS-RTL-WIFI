@@ -32,6 +32,10 @@ typedef NS_ENUM(NSInteger, RTWIconState) {
 /* Collapsed-menu glyphs for the pinned active network row. */
 + (NSImage *)menuWifiIcon;   /* grey, non-template */
 + (NSImage *)menuLockIcon;   /* white, non-template */
+/* mejoras-optiplex: template variants for the active-network row, so the
+ * image view tints them for light and dark menus. */
++ (NSImage *)menuWifiTemplateIcon;
++ (NSImage *)menuLockTemplateIcon;
 @end
 
 NS_ASSUME_NONNULL_END

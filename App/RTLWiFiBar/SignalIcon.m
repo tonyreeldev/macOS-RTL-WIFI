@@ -175,6 +175,26 @@ static NSLock *gIconCacheLock;
     }];
 }
 
++ (NSImage *)menuWifiTemplateIcon {
+    return [self cached:@"menu-wifi-template" maker:^NSImage *{
+        NSImage *native = [self symbolBitmapNamed:@"wifi" points:16.0 tint:nil];
+        if (native) return native;
+        NSImage *drawn = [self drawWifiArcsInColor:[NSColor blackColor] points:16.0];
+        drawn.template = YES;
+        return drawn;
+    }];
+}
+
++ (NSImage *)menuLockTemplateIcon {
+    return [self cached:@"menu-lock-template" maker:^NSImage *{
+        NSImage *native = [self symbolBitmapNamed:@"lock.fill" points:16.0 tint:nil];
+        if (native) return native;
+        NSImage *drawn = [self drawLockInColor:[NSColor blackColor] points:16.0];
+        drawn.template = YES;
+        return drawn;
+    }];
+}
+
 #pragma mark Fallback glyphs (drawn, no SF Symbols)
 
 /* Classic Wi-Fi arcs: three strokes + bottom dot, all in one fixed color. */

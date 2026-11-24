@@ -85,7 +85,7 @@ ARCHS="-arch x86_64 -arch arm64"   # universal; Intel is the primary target
 MIN="-mmacosx-version-min=11.0"
 FLAGS=(-fobjc-arc -fno-modules -Wall -Wno-deprecated-declarations
        $ARCHS $MIN -isysroot "$SDK" -I"$SRC_DIR")
-FRAMEWORKS="-framework Cocoa -framework IOKit -framework Security"
+FRAMEWORKS="-framework Cocoa -framework IOKit -framework Security -framework SystemConfiguration"
 
 SOURCES=(main.m AppDelegate.m DriverClient.m ProfileStore.m RTWLog.m SignalIcon.m RTWCrashReporter.m)
 

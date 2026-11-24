@@ -46,3 +46,13 @@
 "Disconnect needs the updated driver - reinstall the kext" = "Desconectar requiere el controlador actualizado - reinstale el kext";
 "Could not join \"%@\"" = "No se pudo unir a \"%@\"";
 "The saved password was not accepted. If the password changed (a phone hotspot or a new router key), type the new one in the next window." = "No se aceptó la contraseña guardada. Si la contraseña cambió (punto de acceso del teléfono o nueva clave del router), escriba la nueva en la ventana siguiente.";
+"open" = "abierta";
+"good signal" = "señal buena";
+"fair signal" = "señal media";
+"weak signal" = "señal baja";
+"other access point" = "otro punto de acceso";
+"Disconnect from \"%@\"" = "Desconectar de \"%@\"";
+"Reconnect to \"%@\"" = "Reconectar a \"%@\"";
+"Connected to" = "Conectado a";
+"Pause Wi-Fi while a cable is connected" = "Pausar Wi-Fi con cable conectado";
+"Wi-Fi paused - cable connected" = "Wi-Fi en pausa: hay cable conectado";
