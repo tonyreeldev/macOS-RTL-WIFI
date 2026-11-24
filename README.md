@@ -1,3 +1,39 @@
+# RTLWiFiBar – mejoras (rama `mejoras-optiplex`)
+
+> Fork personal de [chris1111/macOS-RTL-WIFI](https://github.com/chris1111/macOS-RTL-WIFI). Esta rama **solo cambia la app de la barra de menús (RTLWiFiBar)**; el driver es el de chris1111 sin cambios. No es un proyecto oficial ni está respaldado por chris1111.
+> *Personal fork. This branch only changes the menu bar app (RTLWiFiBar); the driver is chris1111's, unchanged. English summary below.*
+
+### Descarga
+App compilada en **[Releases](../../releases)** (`RTLWiFiBar-8.8.4-optiplex.1.zip`, Intel y Apple Silicon).
+
+### Qué cambia respecto de RTLWiFiBar 8.8.4
+- **Red conectada clara:** bloque "Conectado a *red*" con banda, señal e IP, con colores del sistema (modo claro y oscuro).
+- **Lista más simple:** `Red · 5 GHz · señal buena ✓` en lugar de `(WPA2-PSK, ch 44, -61 dBm)`.
+- **Cambiar de red sin olvidar la actual:** la app deja la red actual y se une a la nueva; la anterior sigue guardada.
+- **"Desconectar de *red*" / "Reconectar a *red*"** en lugar de "Desconectar Wi-Fi USB".
+- **"Buscar ahora" estando conectado hace un escaneo real:** el driver no escanea mientras está asociado, así que la app se desconecta unos segundos, busca y vuelve a la misma red (salvo que elijas otra).
+- **Otros puntos de acceso de la misma red** visibles en la lista (informativos: el driver se une por nombre de red).
+- **Opción "Pausar Wi-Fi con cable conectado"** (desactivada por defecto): pausa el Wi-Fi mientras haya un cable Ethernet con IP y lo reanuda al quitarlo. Quien necesite las dos conexiones a la vez la deja apagada.
+- **Contraseñas en el Llavero de macOS** (antes, archivo propio con la clave ofuscada). Se migran solas la primera vez.
+
+### Instalación
+1. Instala primero **macOS-RTL-WIFI 1.1.2 de chris1111** (driver + app original) desde [sus releases](https://github.com/chris1111/macOS-RTL-WIFI/releases) y reinicia.
+2. Descarga el zip de esta versión, descomprímelo, cierra RTLWiFiBar y reemplaza `/Applications/RTLWiFiBar.app` (pide la clave de administrador).
+3. La primera vez macOS avisa que no puede verificar al desarrollador (la app no está firmada con un certificado de Apple). Ábrela con **clic derecho > Abrir**, o en **Ajustes > Privacidad y seguridad > Abrir igualmente**.
+4. Tus redes guardadas se conservan; las contraseñas pasan al Llavero automáticamente.
+
+Para volver a la original, reinstala el paquete de chris1111.
+
+### Compilar
+`./Create_Build.tool` (la app compila con las Command Line Tools; el driver necesita Xcode). Si existe en el Llavero un certificado de firma llamado "RTLWiFiBar Local Signing" se firma con él; si no, firma ad-hoc.
+
+### English summary
+Menu bar app changes only (driver unchanged): clear "Connected to *network*" block; short list format (band + signal in words); switch networks without forgetting the current one; "Disconnect from *network*"; "Rescan" while connected does a real sweep (brief disconnect, then rejoins); other APs of the same network listed; optional "Pause Wi-Fi while a cable is connected" (off by default); Wi-Fi passwords stored in the macOS Keychain (migrated automatically). Install chris1111's macOS-RTL-WIFI 1.1.2 first, then replace `/Applications/RTLWiFiBar.app` with the one from Releases (right-click > Open the first time: not signed with an Apple Developer ID).
+
+Licencia / License: GPL-2.0, como el proyecto original. Créditos del driver y de la app base: chris1111 y los autores listados en `CREDITS.md`.
+
+---
+
 [![pages-build-deployment](https://github.com/chris1111/macOS-RTL-WIFI/actions/workflows/pages/pages-build-deployment/badge.svg)](https://github.com/chris1111/macOS-RTL-WIFI/actions/workflows/pages/pages-build-deployment) [![License: GPL v2](https://img.shields.io/badge/License-GPL%20v2-blue.svg)](https://github.com/chris1111/macOS-RTL-WIFI/blob/main/LICENSE) [![.github/workflows/Build.yml](https://github.com/chris1111/macOS-RTL-WIFI/actions/workflows/Build.yml/badge.svg)](https://github.com/chris1111/macOS-RTL-WIFI/actions/workflows/Build.yml)
 # macOS-RTL-WIFI
 Realtek USB Wi-Fi driver (RTL81xx / RTL88xx families) for Intel macOS
