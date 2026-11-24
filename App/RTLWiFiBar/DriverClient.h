@@ -28,6 +28,9 @@ NS_ASSUME_NONNULL_BEGIN
                              authMode:(uint8_t)authMode
                        needsPassphrase:(BOOL)needsPassphrase; /* synthetic join target */
 - (void)getBSSID:(uint8_t *)out6; /* writes 6 bytes */
+/* mejoras: YES = join exactly this AP (the user picked this row).
+ * Automatic rejoins and re-submits leave it NO and join by SSID. */
+@property (nonatomic, assign) BOOL pinBssid;
 @end
 
 /* Live driver snapshot. */

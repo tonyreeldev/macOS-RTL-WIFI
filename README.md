@@ -1,38 +1,54 @@
-# RTLWiFiBar – mejoras (rama `mejoras-optiplex`)
+# macOS-RTL-WIFI – mejoras (rama `mejoras`, versión `-tr`)
 
-> Fork personal de [chris1111/macOS-RTL-WIFI](https://github.com/chris1111/macOS-RTL-WIFI). Esta rama **solo cambia la app de la barra de menús (RTLWiFiBar)**; el driver es el de chris1111 sin cambios. No es un proyecto oficial ni está respaldado por chris1111.
-> *Personal fork. This branch only changes the menu bar app (RTLWiFiBar); the driver is chris1111's, unchanged. English summary below.*
+> Fork personal de [chris1111/macOS-RTL-WIFI](https://github.com/chris1111/macOS-RTL-WIFI) con cambios en el **driver** (`1.1.2-tr.1`) y en la **app de la barra de menús RTLWiFiBar** (`8.8.4-tr.2`). No es un proyecto oficial ni está respaldado por chris1111.
+> *Personal fork with changes to the driver (1.1.2-tr.1) and the RTLWiFiBar menu bar app (8.8.4-tr.2). English summary below.*
 
-### Descarga
-App compilada en **[Releases](../../releases)** (`RTLWiFiBar-8.8.4-optiplex.1.zip`, Intel y Apple Silicon).
+### Para qué equipos y adaptadores
+- **Adaptadores Wi-Fi USB de Realtek** soportados por macOS-RTL-WIFI 1.1.2 (263 IDs USB). No sirve para tarjetas internas PCIe/M.2 ni para otras marcas.
+- **Mac Intel o Hackintosh** (OpenCore o Clover), **macOS 11 a 26**. El driver es solo x86_64; la app es universal.
+- Modo cliente, WPA2-Personal.
 
-### Qué cambia respecto de RTLWiFiBar 8.8.4
-- **Red conectada clara:** bloque "Conectado a *red*" con banda, señal e IP, con colores del sistema (modo claro y oscuro).
-- **Lista más simple:** `Red · 5 GHz · señal buena ✓` en lugar de `(WPA2-PSK, ch 44, -61 dBm)`.
-- **Cambiar de red sin olvidar la actual:** la app deja la red actual y se une a la nueva; la anterior sigue guardada.
-- **"Desconectar de *red*" / "Reconectar a *red*"** en lugar de "Desconectar Wi-Fi USB".
-- **"Buscar ahora" estando conectado hace un escaneo real:** el driver no escanea mientras está asociado, así que la app se desconecta unos segundos, busca y vuelve a la misma red (salvo que elijas otra).
-- **Otros puntos de acceso de la misma red** visibles en la lista (informativos: el driver se une por nombre de red).
-- **Opción "Pausar Wi-Fi con cable conectado"** (desactivada por defecto): pausa el Wi-Fi mientras haya un cable Ethernet con IP y lo reanuda al quitarlo. Quien necesite las dos conexiones a la vez la deja apagada.
-- **Contraseñas en el Llavero de macOS** (antes, archivo propio con la clave ofuscada). Se migran solas la primera vez.
+| Familia | 5 GHz | Probado con el driver de chris1111 | Probado con `-tr` |
+|---|---|---|---|
+| RTL8822BU / RTL8822CU (incluye RTL8812BU) | Sí | ✅ Archer T4U, Cudy WU1400, TRENDnet mini | ✅ Archer T3U (RTL8812BU, 2357:012d) |
+| RTL8821CU / RTL8811CU | Sí | ✅ MLINK 96581, 0bda:c811 | – |
+| RTL8821AU / RTL8811AU | Sí | ✅ Archer T2U Plus | – |
+| RTL8812AU | Sí | sin probar | – |
+| RTL8814AU | Sí | sin probar | – |
+| RTL8188EU / RTL8192EU | No | ✅ TL-WN725N, TL-WN823N, TL-WN822N, TL-WN821N | – |
+| RTL8723BU | No | ✅ Edimax EW-7611UCB | – |
+| RTL8192CU (8188CU/CUS/CTV/RU/92C), RTL8192DU, RTL8192FU, RTL8710BU | según chip | sin probar | – |
+
+Los cambios del driver están en la capa común (la unión a la red), no en el código de cada chip, así que aplican a todas las familias; solo se probaron con el Archer T3U. Con adaptadores de solo 2.4 GHz igual sirve elegir el punto de acceso, pero "Preferir 5 GHz" no hace nada.
+
+### Qué cambia en el driver (1.1.2-tr.1)
+- **Unirse al punto de acceso elegido:** OID nuevo `0x0D01011A` con el BSSID; el driver va al canal de ese AP y se asocia solo a él (`IEEE80211_F_DESBSSID`). El original elige siempre el AP con más señal de la red, casi siempre uno de 2.4 GHz.
+- **Seguro:** si el AP elegido no está en la última búsqueda, se une por nombre como antes; nunca queda buscando un AP que no existe.
+- **Compatible:** la app original funciona igual con este driver, y esta app funciona con el driver original (sin la elección de AP).
+
+### Qué cambia en la app (8.8.4-tr.2)
+- **Lista estilo macOS:** `Red   5 GHz · CH 44   [candado] [señal]`, con los íconos del sistema; el canal distingue los AP de una misma red.
+- **Elegir el punto de acceso:** clic en una fila = ese AP. Si el driver no lo conoce, la app deja la red, barre los canales y se une.
+- **"Preferir 5 GHz"** (activada por defecto) y **recordar el AP elegido:** la reconexión automática y "Reconectar" vuelven a ese AP en vez de al de más señal.
+- **"Buscar ahora" estando conectado hace un barrido real** (corte de unos segundos y vuelve a la misma red).
+- **Red conectada clara:** "Conectado a *red*" con banda, dBm e IP; "Desconectar de *red*", "Reconectar a *red*" y "Cancelar conexión a *red*".
+- **Cambiar de red sin olvidar la actual**, **"Pausar Wi-Fi con cable conectado"** (opcional, apagada por defecto) y **contraseñas en el Llavero de macOS**.
 
 ### Instalación
-1. Instala primero **macOS-RTL-WIFI 1.1.2 de chris1111** (driver + app original) desde [sus releases](https://github.com/chris1111/macOS-RTL-WIFI/releases) y reinicia.
-2. Descarga el zip de esta versión, descomprímelo, cierra RTLWiFiBar y reemplaza `/Applications/RTLWiFiBar.app` (pide la clave de administrador).
-3. La primera vez macOS avisa que no puede verificar al desarrollador (la app no está firmada con un certificado de Apple). Ábrela con **clic derecho > Abrir**, o en **Ajustes > Privacidad y seguridad > Abrir igualmente**.
-4. Tus redes guardadas se conservan; las contraseñas pasan al Llavero automáticamente.
+1. Instala **macOS-RTL-WIFI 1.1.2 de chris1111** desde [sus releases](https://github.com/chris1111/macOS-RTL-WIFI/releases) y reinicia.
+2. **Driver:** reemplaza `macOS-RTL-WIFI.kext` por el de este release donde lo tengas: en OpenCore, `EFI/OC/Kexts/` (respalda tu EFI antes y prueba primero desde un USB); si lo instalaste en el sistema, `/Library/Extensions/`. Reinicia.
+3. **App:** cierra RTLWiFiBar y reemplaza `/Applications/RTLWiFiBar.app` por la del zip (pide la clave de administrador). La primera vez macOS avisa que no puede verificar al desarrollador: **clic derecho > Abrir**.
+4. Cada versión nueva de la app pide una vez acceso al Llavero: escribe la contraseña de la Mac y elige **"Permitir siempre"**.
 
-Para volver a la original, reinstala el paquete de chris1111.
+Para volver al original, reinstala el paquete de chris1111.
 
 ### Compilar
-`./Create_Build.tool` (la app compila con las Command Line Tools; el driver necesita Xcode). Si existe en el Llavero un certificado de firma llamado "RTLWiFiBar Local Signing" se firma con él; si no, firma ad-hoc.
+`./Create_Build.tool` (necesita Xcode). Sin Xcode: la app compila con las Command Line Tools (pasos de la sección [3/3] del script) y el driver con `scripts/build_kext_sin_xcode.sh <carpeta>`. Si existe en el Llavero un certificado de firma "RTLWiFiBar Local Signing" la app se firma con él; si no, ad-hoc.
 
 ### English summary
-Menu bar app changes only (driver unchanged): clear "Connected to *network*" block; short list format (band + signal in words); switch networks without forgetting the current one; "Disconnect from *network*"; "Rescan" while connected does a real sweep (brief disconnect, then rejoins); other APs of the same network listed; optional "Pause Wi-Fi while a cable is connected" (off by default); Wi-Fi passwords stored in the macOS Keychain (migrated automatically). Install chris1111's macOS-RTL-WIFI 1.1.2 first, then replace `/Applications/RTLWiFiBar.app` with the one from Releases (right-click > Open the first time: not signed with an Apple Developer ID).
+Driver 1.1.2-tr.1: joins the access point you pick (new BSSID OID, `IEEE80211_F_DESBSSID`), falls back to joining by name when that AP is not in the last scan; stays compatible with the stock app. App 8.8.4-tr.2: macOS-style list with band, channel, lock and signal glyphs; pick a specific AP (sweeps first when the driver does not know it); "Prefer 5 GHz" (on by default) and the picked AP are used by auto-rejoin and Reconnect; real rescan while connected; clearer connect/disconnect labels; switch networks without forgetting; optional pause while a cable is connected; passwords in the Keychain. Same adapters as macOS-RTL-WIFI 1.1.2 (Realtek USB, Intel macOS 11-26); tested with an Archer T3U (RTL8812BU).
 
 Licencia / License: GPL-2.0, como el proyecto original. Créditos del driver y de la app base: chris1111 y los autores listados en `CREDITS.md`.
-
----
 
 [![pages-build-deployment](https://github.com/chris1111/macOS-RTL-WIFI/actions/workflows/pages/pages-build-deployment/badge.svg)](https://github.com/chris1111/macOS-RTL-WIFI/actions/workflows/pages/pages-build-deployment) [![License: GPL v2](https://img.shields.io/badge/License-GPL%20v2-blue.svg)](https://github.com/chris1111/macOS-RTL-WIFI/blob/main/LICENSE) [![.github/workflows/Build.yml](https://github.com/chris1111/macOS-RTL-WIFI/actions/workflows/Build.yml/badge.svg)](https://github.com/chris1111/macOS-RTL-WIFI/actions/workflows/Build.yml)
 # macOS-RTL-WIFI

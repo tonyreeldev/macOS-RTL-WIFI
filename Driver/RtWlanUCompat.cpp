@@ -160,6 +160,8 @@ struct JoinState {
     uint8_t  passphraseLength;
     bool     hasSsid;
     bool     hasAuth;
+    uint8_t  bssid[6];   /* mejoras: desired AP, valid when hasBssid */
+    bool     hasBssid;
 };
 
 static JoinState g_joinState{};
@@ -697,6 +699,13 @@ static IOReturn performJoin(RTWUSBController* controller) {
     join.version = RTW_CONTROL_VERSION;
     join.ssidLength = s->ssidLength;
     memcpy(join.ssid, s->ssid, s->ssidLength);
+    if (s->hasBssid) { /* mejoras: pin the AP the user picked */
+        uint8_t* rsv = reinterpret_cast<uint8_t*>(join.reserved);
+        memcpy(rsv, s->bssid, 6);
+        rsv[6] = RTW_CONTROL_JOIN_BSSID_SET;
+        IOLog("RtWlanUCompat: join pinned to bssid %02x:%02x:%02x:%02x:%02x:%02x\n",
+              s->bssid[0], s->bssid[1], s->bssid[2], s->bssid[3], s->bssid[4], s->bssid[5]);
+    }
 
     /* Field round 10 root cause: the utility writes its OWN auth enum to
      * 0xFF010194 (decoded from _CmdAkm @0x10003c770): 0 open, 1/2 shared
@@ -792,6 +801,17 @@ static IOReturn oidSet(RTWUSBController* controller, RTWlanUOidFrame* frame) {
         g_joinState.ssidLength = (uint8_t)len;
         g_joinState.hasSsid = len != 0;
         frame->retLen = len;
+        return kIOReturnSuccess;
+    }
+    case RTWLANU_SID_DESIRED_BSSID: {
+        /* mejoras: never triggers the join by itself. */
+        if (frame->length < 6u) { frame->retLen = 0; return kIOReturnBadArgument; }
+        bool any = false;
+        for (unsigned i = 0; i < 6u; ++i) if (frame->data[i]) any = true;
+        memcpy(g_joinState.bssid, frame->data, 6);
+        g_joinState.hasBssid = any;
+        frame->retLen = 6;
+        IOLog("RtWlanUCompat: desired bssid %s\n", any ? "set" : "cleared");
         return kIOReturnSuccess;
     }
     case RTWLANU_QID_AUTH_MODE:

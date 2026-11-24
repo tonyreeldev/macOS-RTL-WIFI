@@ -24,6 +24,10 @@
 + (nullable NSImage *)symbolBitmapNamed:(NSString *)symbolName
                                  points:(CGFloat)points
                                  tint:(nullable NSColor *)tint;
++ (nullable NSImage *)symbolBitmapNamed:(NSString *)symbolName
+                                 points:(CGFloat)points
+                                   tint:(nullable NSColor *)tint
+                          variableValue:(double)variableValue;
 @end
 
 static const CGFloat kPi = 3.14159265358979323846;
@@ -80,11 +84,29 @@ static NSLock *gIconCacheLock;
 + (nullable NSImage *)symbolBitmapNamed:(NSString *)symbolName
                                  points:(CGFloat)points
                                   tint:(nullable NSColor *)tint {
+    return [self symbolBitmapNamed:symbolName points:points tint:tint variableValue:-1.0];
+}
+
+/* mejoras: variableValue in 0...1 fills the glyph partially (the
+ * native Wi-Fi strength look: unfilled arcs keep a lower alpha, which the
+ * SourceIn tint below preserves); < 0 = plain symbol. */
++ (nullable NSImage *)symbolBitmapNamed:(NSString *)symbolName
+                                 points:(CGFloat)points
+                                  tint:(nullable NSColor *)tint
+                          variableValue:(double)variableValue {
     if (![NSImage respondsToSelector:@selector(imageWithSystemSymbolName:accessibilityDescription:)]) {
         return nil;
     }
-    NSImage *symbol = [NSImage imageWithSystemSymbolName:symbolName
-                                  accessibilityDescription:@"Wi-Fi"];
+    NSImage *symbol = nil;
+    if (variableValue >= 0.0) {
+        if (@available(macOS 13.0, *)) {
+            symbol = [NSImage imageWithSystemSymbolName:symbolName
+                                          variableValue:variableValue
+                               accessibilityDescription:@"Wi-Fi"];
+        }
+    }
+    if (!symbol) symbol = [NSImage imageWithSystemSymbolName:symbolName
+                                      accessibilityDescription:@"Wi-Fi"];
     if (!symbol) return nil;
 
     /* NOTE: no NSImageSymbolConfiguration / NSSymbolWeight here. The macOS
@@ -155,6 +177,35 @@ static NSLock *gIconCacheLock;
 }
 
 #pragma mark Collapsed-menu glyphs
+
+/* mejoras: signal glyph for the network list (1-4 bars mapped to
+ * the native variable Wi-Fi symbol). tint nil = template (image views tint
+ * it); a tint = fixed color for text attachments, which are not tinted. */
++ (NSImage *)menuSignalIconBars:(NSInteger)bars tint:(nullable NSColor *)tint {
+    if (bars < 1) bars = 1;
+    if (bars > 4) bars = 4;
+    NSString *key = [NSString stringWithFormat:@"menu-signal-%ld-%@", (long)bars,
+                     tint ? [tint description] : @"template"];
+    return [self cached:key maker:^NSImage *{
+        static const double kFill[5] = {0.0, 0.15, 0.45, 0.75, 1.0};
+        NSImage *native = [self symbolBitmapNamed:@"wifi" points:15.0 tint:tint variableValue:kFill[bars]];
+        if (native) return native;
+        NSImage *drawn = [self drawWifiArcsInColor:tint ?: [NSColor blackColor] points:15.0];
+        drawn.template = (tint == nil);
+        return drawn;
+    }];
+}
+
++ (NSImage *)menuLockIconTint:(nullable NSColor *)tint {
+    NSString *key = [NSString stringWithFormat:@"menu-lock-small-%@", tint ? [tint description] : @"template"];
+    return [self cached:key maker:^NSImage *{
+        NSImage *native = [self symbolBitmapNamed:@"lock.fill" points:12.0 tint:tint];
+        if (native) return native;
+        NSImage *drawn = [self drawLockInColor:tint ?: [NSColor blackColor] points:12.0];
+        drawn.template = (tint == nil);
+        return drawn;
+    }];
+}
 
 + (NSImage *)menuWifiIcon {
     return [self cached:@"menu-wifi" maker:^NSImage *{

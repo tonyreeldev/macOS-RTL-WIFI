@@ -102,6 +102,7 @@ _Static_assert(sizeof(RTWCompatOidFrame) == RTWCOMPAT_OID_FRAME_SIZE,
 #define RTWCOMPAT_SID_HIBERNATE_MODE    0xFF01041Cu  /* accepted                */
 #define RTWCOMPAT_SID_CURRENT_SSID      0xFF01041Bu  /* join-path ssid set      */
 #define RTWCOMPAT_SID_DISASSOCIATE      0x0D010115u  /* leave + stop (kext 1.1.2) */
+#define RTWCOMPAT_SID_DESIRED_BSSID     0x0D01011Au  /* mejoras: 6-byte AP pin; older kexts ignore it */
 
 /* Survey record layout (0x640 bytes, unused bytes zero). Decoded from the
  * vendor GUI parser; see Driver/RtWlanUCompat.h for the field history. */

@@ -139,6 +139,11 @@ typedef struct RTWlanUOidFrame {
  * erases the profile - RTW_CONTROL_LEAVE. A later join or scan brings the
  * station back up. No payload. */
 #define RTWLANU_SID_DISASSOCIATE       0x0D010115u
+/* mejoras: optional desired BSSID for the pending join (6 bytes,
+ * all zero = none). Sent after the SSID set (which resets the join state)
+ * and before auth/key. Older kexts accept and ignore it, so the app can
+ * always send it: the join then simply goes by SSID. */
+#define RTWLANU_SID_DESIRED_BSSID      0x0D01011Au
 /* WirelessAssociate stores the join target through the very constant it
  * queries (decoded §8: 0xFF01041B is used query+set on the association
  * path, unlike the UI-level 0xFF070102 SetNetworkName path). */
@@ -202,6 +207,6 @@ typedef struct RTWlanUOidFrame {
 
 /* Fixed driver version string surfaced in the utility About panel; also
  * published as the registry property "RtWlanDriverVersion". */
-#define RTWLANU_DRIVER_VERSION "1.1.1"
+#define RTWLANU_DRIVER_VERSION "1.1.2-tr.1"
 
 #endif /* RTWLANU_COMPAT_H */

@@ -57,3 +57,7 @@
 "Pause Wi-Fi while a cable is connected" = "Pause Wi-Fi while a cable is connected";
 "Wi-Fi paused - cable connected" = "Wi-Fi paused - cable connected";
 "Enter the router password to establish the connection. The password is stored in the macOS Keychain and the app reconnects to this network by itself after a restart; use Forget in the menu to remove it." = "Enter the router password to establish the connection. The password is stored in the macOS Keychain and the app reconnects to this network by itself after a restart; use Forget in the menu to remove it.";
+
+/* mejoras */
+"Prefer 5 GHz" = "Prefer 5 GHz";
+"Cancel joining \"%@\"" = "Cancel joining \"%@\"";

@@ -76,6 +76,10 @@ typedef struct RTWControlReply {
     uint32_t reserved[3];
 } RTWControlReply;
 
+/* mejoras: RTWControlJoin.reserved byte 6 value meaning "bytes 0-5
+ * hold the desired BSSID" (join only that AP when the survey has seen it). */
+#define RTW_CONTROL_JOIN_BSSID_SET 1u
+
 typedef struct RTWControlJoin {
     uint32_t version;
     uint32_t ssidLength;
@@ -203,10 +207,15 @@ static inline enum RTWControlValidation rtw_control_validate_request(
     if (selector == RTW_CONTROL_JOIN) {
         const uint32_t length = rtw_control_load32(bytes + offsetof(RTWControlJoin, ssidLength));
         if (!length || length > RTW_CONTROL_MAX_SSID) return RTW_CONTROL_BAD_SSID;
+        /* mejoras: reserved carries an optional desired BSSID -
+         * bytes 0-5 the BSSID, byte 6 = 1 when set, byte 7 always 0. With
+         * byte 6 = 0 the whole field must stay zero (unchanged contract). */
+        const uint8_t* rsv = bytes + offsetof(RTWControlJoin, reserved);
         if (!rtw_control_zeroes(bytes + offsetof(RTWControlJoin, ssid) + length,
                                RTW_CONTROL_MAX_SSID - length) ||
-            !rtw_control_zeroes(bytes + offsetof(RTWControlJoin, reserved),
-                               sizeof(((RTWControlJoin*)0)->reserved)))
+            rsv[7] || rsv[6] > RTW_CONTROL_JOIN_BSSID_SET ||
+            (rsv[6] == 0 && !rtw_control_zeroes(rsv, 6)) ||
+            (rsv[6] == RTW_CONTROL_JOIN_BSSID_SET && rtw_control_zeroes(rsv, 6)))
             return RTW_CONTROL_BAD_RESERVED;
     } else if (!rtw_control_zeroes(bytes + offsetof(RTWControlRequest, reserved),
                                    sizeof(((RTWControlRequest*)0)->reserved))) {

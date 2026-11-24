@@ -1953,7 +1953,7 @@ void RTWUSBController::eraseProfile() {
     resetWpaRecovery();
     joinRequested_=false;auto&ic=core_.sc_ic;
     explicit_bzero(ic.ic_psk,sizeof(ic.ic_psk));explicit_bzero(ic.ic_des_essid,sizeof(ic.ic_des_essid));ic.ic_des_esslen=0;
-    ic.ic_flags&=~(IEEE80211_F_PSK|IEEE80211_F_RSNON|IEEE80211_F_AUTO_JOIN);
+    ic.ic_flags&=~(IEEE80211_F_PSK|IEEE80211_F_RSNON|IEEE80211_F_AUTO_JOIN|IEEE80211_F_DESBSSID); /* mejoras: DESBSSID */
 }
 void RTWUSBController::quiesce(bool erase) {
     if(stopping_)return;
@@ -2373,19 +2373,32 @@ IOReturn RTWUSBController::executeJoinTail(const RTWControlJoin *join) {
     /* 1.0.31: remember the target's channel from the live survey BEFORE the
      * quiesce below empties the node tree (strongest signal wins). */
     unsigned hintChannel=0;int hintRssi=-100000;unsigned alt24=0;int alt24Rssi=-1;
+    /* mejoras: optional desired BSSID (RTWControlJoin.reserved). It is
+     * only honored when the survey has seen that AP; otherwise the join goes
+     * by SSID as before, so a vanished AP can never leave us scanning. */
+    const uint8_t*wantBssid=reinterpret_cast<const uint8_t*>(join->reserved);
+    const bool bssidRequested=wantBssid[6]==RTW_CONTROL_JOIN_BSSID_SET;
+    unsigned desiredChannel=0;
     {
         unsigned visited=0;
         for(ieee80211_node*hn=RB_MIN(ieee80211_tree,&core_.sc_ic.ic_tree);hn&&visited++<1024;hn=RB_NEXT(ieee80211_tree,&core_.sc_ic.ic_tree,hn)){
             if(hn->ni_esslen!=join->ssidLength||!hn->ni_esslen||memcmp(hn->ni_essid,join->ssid,hn->ni_esslen))continue;
             if(!hn->ni_chan||hn->ni_chan==IEEE80211_CHAN_ANYC)continue;
             const unsigned c=(unsigned)ieee80211_chan2ieee(&core_.sc_ic,hn->ni_chan);
+            if(bssidRequested&&c>=1&&c<255&&!memcmp(hn->ni_bssid,wantBssid,6))desiredChannel=c;
             {int score=(int)hn->ni_rssi-((core_.sc_ic.ic_bad_valid&&!memcmp(hn->ni_bssid,core_.sc_ic.ic_bad_bssid,6))?1000:0);if(c>=1&&c<255&&score>hintRssi){hintRssi=score;hintChannel=c;}
             if(c>=1&&c<255&&IEEE80211_IS_CHAN_2GHZ(hn->ni_chan)&&(int)hn->ni_rssi>alt24Rssi){alt24Rssi=(int)hn->ni_rssi;alt24=c;}}
         }
     }
     /* a re-submit after a failed join sees only the one channel that was scanned, so keep the earlier 2.4 GHz choice */
     if(alt24)core_.sc_ic.ic_join_alt24=(uint8_t)alt24;
-    if(core_.sc_ic.ic_avoid5&&core_.sc_ic.ic_join_alt24)hintChannel=core_.sc_ic.ic_join_alt24;
+    const bool pinBssid=bssidRequested&&desiredChannel;
+    if(pinBssid)hintChannel=desiredChannel; /* mejoras: the AP the user picked */
+    else if(core_.sc_ic.ic_avoid5&&core_.sc_ic.ic_join_alt24)hintChannel=core_.sc_ic.ic_join_alt24;
+    if(bssidRequested)IOLog("RTWUSBController: join pinned to bssid %02x:%02x:%02x:%02x:%02x:%02x -> %s (ch %u)\n",
+        wantBssid[0],wantBssid[1],wantBssid[2],wantBssid[3],wantBssid[4],wantBssid[5],
+        pinBssid?"pinned":"not in survey, joining by SSID",desiredChannel);
+    setProperty("RTWDiagJoinPinnedBssid",(unsigned long long)(pinBssid?1:0),32);
     setProperty("RTWDiagJoinHintChannel",(unsigned long long)hintChannel,32);
     setProperty("RTWDiagJoinAlt24Channel",(unsigned long long)alt24,32);
     const uint64_t tailStartMS=nowMS();
@@ -2418,6 +2431,8 @@ IOReturn RTWUSBController::executeJoinTail(const RTWControlJoin *join) {
         memcpy(core_.sc_ic.ic_psk,join->pmk,32);core_.sc_ic.ic_flags|=IEEE80211_F_PSK;
     }
     core_.sc_ic.ic_des_esslen=join->ssidLength;memcpy(core_.sc_ic.ic_des_essid,join->ssid,join->ssidLength);
+    if(pinBssid){core_.sc_ic.ic_flags|=IEEE80211_F_DESBSSID;IEEE80211_ADDR_COPY(core_.sc_ic.ic_des_bssid,wantBssid);}
+    else core_.sc_ic.ic_flags&=~(u_int32_t)IEEE80211_F_DESBSSID; /* mejoras */
     if(!joinRequested_)firstJoinRequestedMS_=nowMS();
     joinRequested_=true;
     lastJoinRequestedMS_=nowMS();
@@ -2479,7 +2494,11 @@ IOReturn RTWUSBController::handleControl(ControlCall*call) {
                 join->ssidLength<=32?join->ssidLength:0);
             const size_t haveLen=printableSsidLen(live->ni_essid,
                 live->ni_esslen<=32?live->ni_esslen:0);
-            if(wantLen&&wantLen==haveLen&&
+            /* mejoras: a join pinned to ANOTHER AP of the same SSID
+             * is a real move, never an idempotent re-join. */
+            const uint8_t*pinRsv=reinterpret_cast<const uint8_t*>(join->reserved);
+            const bool otherAp=pinRsv[6]==RTW_CONTROL_JOIN_BSSID_SET&&memcmp(live->ni_bssid,pinRsv,6)!=0;
+            if(!otherAp&&wantLen&&wantLen==haveLen&&
                memcmp(live->ni_essid,join->ssid,wantLen)==0){
                 char name[33]{};
                 memcpy(name,join->ssid,wantLen<32?wantLen:32);

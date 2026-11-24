@@ -871,6 +871,23 @@ NSString * const RTWDriverErrorDomain = @"com.rtlwifi.RTLWiFiBar.driver";
         return NO;
     }
 
+    /* mejoras: 1b. pin the AP the user picked (after the SSID set,
+     * which resets the pending state; before auth/key, which fire the join).
+     * Not fatal: an older kext accepts and ignores the OID. */
+    if (entry.pinBssid) {
+        uint8_t bssid[6] = {0};
+        [entry getBSSID:bssid];
+        BOOL any = NO;
+        for (int i = 0; i < 6; i++) if (bssid[i]) any = YES;
+        if (any) {
+            NSString *pinDetail = nil;
+            BOOL pinned = [self oidSet:RTWCOMPAT_SID_DESIRED_BSSID payload:bssid length:6 detail:&pinDetail];
+            RTWLog(@"join pinned to AP %02x:%02x:%02x:%02x:%02x:%02x (ch %u) -> %@",
+                   bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5],
+                   (unsigned)entry.channel, pinned ? @"ok" : (pinDetail ?: @"failed"));
+        }
+    }
+
     /* 2. Auth mode: echo the utility enum the driver packed into the survey
      *    record (+0x23). 0 = open (zero PMK), 3..6 = PSK classes. */
     uint8_t authPayload[4];
