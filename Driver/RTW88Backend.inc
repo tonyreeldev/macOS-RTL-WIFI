@@ -102,6 +102,31 @@ void RTWUSBController::snapshot88(const char*tag,bool full){
  char key[32];snprintf(key,sizeof(key),"RTWSnap_%s",tag);setProperty(key,buf);
  IOFree(buf,cap);
 }
+/* mejoras (1.1.2-tr.7): USB 3.0 mode for 8822BU, Linux rtw88 usb.c (rtw_usb_phy_cfg with usb3_param_8822b,
+   rtw_usb_switch_mode_new). Runs with the MAC powered off, after the efuse read. Returns 1 when the chip was told to
+   re-enumerate. Not tried again once PAD_CTRL2 already asks for U3 (the port or cable is USB 2.0). Opt-out: any
+   "RTW88KeepUSB2" key in the driver personality (Info.plist), since USB 3.0 can disturb 2.4 GHz. */
+int RTWUSBController::usb3Switch88(){
+ const char*state="usb2";int result=0;uint32_t pad=0,cfg=0;
+ if(r88Core_.board.cut==3){(void)r88Write(this,0xff0d,1,0x41);(void)r88Write(this,0xff0e,1,0xa8);(void)r88Write(this,0xff0c,1,0x01|0x80);} /* USB3 PHY 0x01=0xA841, cut D */
+ if(rxPipe_&&rxPipe_->getSpeed()>=kUSBHostConnectionSpeedSuper)state="usb3";
+ else if(!r88Core_.board.usb_mode_switch)state="usb2-efuse-off";
+ else if(getProperty("RTW88KeepUSB2"))state="usb2-kept";
+ else if(r88Read(this,0xff,1,&cfg)||r88Read(this,0xc4,4,&pad))state="usb2-read-error";
+ else if(cfg==0x20)state="usb3";
+ else if(!(pad&((3U<<18)|(1U<<20))))state="usb2-unsupported";
+ else if(((pad>>18)&3U)==2U)state="usb2-port";
+ else{uint32_t mdio=0;
+  if(!r88Read(this,0x10c3,1,&mdio))(void)r88Write(this,0x10c3,1,mdio&~1U);                 /* IO wrapper timeout */
+  pad=(pad&~(3U<<18))|(2U<<18)|(1U<<16);                                                   /* U3 + RSM_EN */
+  if(!r88Write(this,0xc4,4,pad)&&!r88Write(this,0xc5,1,4)){uint32_t pw=0;
+   if(!r88Read(this,0x04,2,&pw))(void)r88Write(this,0x04,2,pw|(1U<<9));                    /* APFM_OFFMAC */
+   IODelay(1000);uint32_t p2=0;if(!r88Read(this,0xc4,4,&p2))(void)r88Write(this,0xc4,4,p2|(1U<<17)); /* NO_PDN_CHIPOFF */
+   state="switching";result=1;}
+  else state="usb2-write-error";}
+ setProperty("RTW88USBMode",state);IOLog("[macOS-RTL-WIFI 1.1.2-tr.7] 8822BU USB mode: %s (PAD_CTRL2 %08x)\n",state,(unsigned)pad);
+ return result;
+}
 int RTWUSBController::attach88(){
  if(!is88Family()||r88Storage_)return EINVAL;r88Storage_=IOMalloc(R88StorageBytes);if(!r88Storage_)return ENOMEM;bzero(r88Storage_,R88StorageBytes);
  int e=bootstrap88(false);
@@ -125,6 +150,9 @@ int RTWUSBController::attach88(){
  /* OTP requires actual powered/running firmware. Read it before interface
   * attach,then power down; start re-reads and compares the immutable MAC. */
  e=rtw88_boot_stop(&r88Core_);if(e){release88Storage();return e;}
+ /* mejoras (1.1.2-tr.7): like Linux rtw88 probe, ask an 8822BU on USB 2.0 to come back as USB 3.0. The chip drops off the
+  * bus and re-enumerates; this instance stops and IOKit matches the new device. */
+ if(family_==RTW_WIFI_RTL8822BU&&usb3Switch88()>0){release88Storage();return EAGAIN;}
  if(r88Core_.board.btcoex){r88CoexTimer_=IOTimerEventSource::timerEventSource(this,coex88TimerAction);if(!r88CoexTimer_){release88Storage();return ENOMEM;}if(!loop_||loop_->addEventSource(r88CoexTimer_)!=kIOReturnSuccess){r88CoexTimer_->release();r88CoexTimer_=nullptr;release88Storage();return EIO;}}
  core_.sc_pdev=&device_;core_.ntxchains=core_.nrxchains=r88Core_.board.tx_streams;core_.avg_pwdb=-1;task_set(&core_.init_task,initTask88,this,"rtw88_init");
  auto&ic=core_.sc_ic;auto&ifp=ic.ic_if;memcpy(ic.ic_myaddr,r88MACAddress_,6);ic.ic_phytype=IEEE80211_T_OFDM;ic.ic_opmode=IEEE80211_M_STA;ic.ic_state=IEEE80211_S_INIT;
@@ -139,7 +167,7 @@ int RTWUSBController::attach88(){
  /* mejoras (1.1.2-tr.2): 8822BU advertises HT40/VHT80 on non-DFS 5 GHz. */
  /* mejoras (1.1.2-tr.5): like Linux rtw88 (rtw_init_ht_cap/rtw_init_vht_cap, 8822B rx_ldpc), also advertise RX LDPC,
   * RX STBC (1 stream) and the 1 MiB VHT A-MPDU limit, so the AP can pick higher MCS and longer aggregates. */
- if(r88WideCaps_){ic.ic_htcaps|=IEEE80211_HTCAP_CBW20_40|IEEE80211_HTCAP_SGI40|IEEE80211_HTCAP_LDPC|(1U<<IEEE80211_HTCAP_RXSTBC_SHIFT);ic.ic_vhtcaps=IEEE80211_VHTCAP_SHORT_GI_80|IEEE80211_VHTCAP_RXLDPC|IEEE80211_VHTCAP_RXSTBC_1|(7U<<IEEE80211_VHTCAP_MAX_A_MPDU_LENGTH_EXPONENT_SHIFT);uint16_t map=core_.nrxchains>1?0xfffa:0xfffe;ic.ic_vht_tx_mcs_map=ic.ic_vht_rx_mcs_map=htole16(map);}
+ if(r88WideCaps_){ic.ic_htcaps|=IEEE80211_HTCAP_CBW20_40|IEEE80211_HTCAP_SGI40|IEEE80211_HTCAP_LDPC|(1U<<IEEE80211_HTCAP_RXSTBC_SHIFT);ic.ic_vhtcaps=IEEE80211_VHTCAP_SHORT_GI_80|IEEE80211_VHTCAP_RXLDPC|IEEE80211_VHTCAP_RXSTBC_1|(7U<<IEEE80211_VHTCAP_MAX_A_MPDU_LENGTH_EXPONENT_SHIFT)|IEEE80211_VHTCAP_SU_BEAMFORMEE_CAPABLE|(3U<<IEEE80211_VHTCAP_BEAMFORMEE_STS_SHIFT);uint16_t map=core_.nrxchains>1?0xfffa:0xfffe;ic.ic_vht_tx_mcs_map=ic.ic_vht_rx_mcs_map=htole16(map);}
  ic.ic_ibss_chan=&ic.ic_channels[supports88Band(false)?1:36];ifp.if_softc=&core_;ifp.if_flags=IFF_BROADCAST|IFF_SIMPLEX|IFF_MULTICAST;ifp.if_ioctl=ioctl88;ifp.if_start=rtwn_start;ifp.if_watchdog=watchdog88;
  memcpy(ifp.if_xname,device_.dv_xname,IFNAMSIZ);if_attach(&ifp);ieee80211_ifattach(&ifp,this);ic.ic_updateslot=update88EDCA;ic.ic_updateedca=update88EDCA;ic.ic_ampdu_rx_start=ampduRXStart;ic.ic_ampdu_rx_stop=ampduRXStop;ic.ic_ampdu_tx_start=ampduTXStart;ic.ic_ampdu_tx_stop=ampduTXStop;
  core_.sc_newstate=ic.ic_newstate;ic.ic_newstate=stateTransition;refresh88Modes();ieee80211_media_init(&ifp);refresh88Modes();setProperty("RTW88Wide",r88WideCaps_);setProperty("RTW88RFPaths",(unsigned long long)r88Core_.board.rf_paths,8);setProperty("RTW88Cut",(unsigned long long)r88Core_.board.cut,8);setProperty("RTW88RFE",(unsigned long long)r88Core_.board.rfe_option,8);return 0;
@@ -284,9 +312,9 @@ int RTWUSBController::state88(ieee80211com*ic,ieee80211_state state,int arg){
  if(previous==IEEE80211_S_AUTH&&state==IEEE80211_S_SCAN&&!r88SnapStall_){r88SnapStall_=true;snapshot88("stall");} /* 1.0.19: first AUTH that fell back to SCAN */
  if(state!=IEEE80211_S_RUN){r88SMPSPending_=r88SMPSWaitingUSB_=false;r88SMPSDeadline_=0;}
  if(r88CoexScanning_&&state!=IEEE80211_S_SCAN&&!ioError(this)&&!r88Core_.firmware.last_error)error=coex88Notify(RTW88_CX_SCAN_FINISH,state);
- if((previous==IEEE80211_S_RUN&&state!=IEEE80211_S_RUN)||state==IEEE80211_S_INIT){cancelCalibration(this);(void)rtw88_phy_radio_set_associated(&r88PHY_,0);if(r88Media_&&r88Core_.firmware.firmware_running&&!r88Core_.firmware.last_error&&!ioError(this)){uint8_t cmd[8]{};if(!rtw_8814au_make_media_status(0,cmd))error=EINVAL;else error=rtw88_station_h2c(&r88Station_,cmd);}r88Media_=r88RateReady_=r88RSSIValid_=false;r88Rates_={};r88VHT_=false;if(previous==IEEE80211_S_RUN&&r88Coex_&&!ioError(this)&&!r88Core_.firmware.last_error){int e=coex88Notify(RTW88_CX_MEDIA_DISCONNECT,state);if(!error)error=e;}}
+ if((previous==IEEE80211_S_RUN&&state!=IEEE80211_S_RUN)||state==IEEE80211_S_INIT){cancelCalibration(this);bfee88Disable();dig88Reset();(void)rtw88_phy_radio_set_associated(&r88PHY_,0);if(r88Media_&&r88Core_.firmware.firmware_running&&!r88Core_.firmware.last_error&&!ioError(this)){uint8_t cmd[8]{};if(!rtw_8814au_make_media_status(0,cmd))error=EINVAL;else error=rtw88_station_h2c(&r88Station_,cmd);}r88Media_=r88RateReady_=r88RSSIValid_=false;r88Rates_={};r88VHT_=false;if(previous==IEEE80211_S_RUN&&r88Coex_&&!ioError(this)&&!r88Core_.firmware.last_error){int e=coex88Notify(RTW88_CX_MEDIA_DISCONNECT,state);if(!error)error=e;}}
  if(state==IEEE80211_S_INIT){if(r88Station_.initialized&&!ioError(this)&&!r88Core_.firmware.last_error){int e=station88Hardware(state);if(!error)error=e;}r88Channel_=0;int e=core_.sc_newstate(ic,state,arg);return error?error:e;}
- auto rollback=[&](int e)->int{bool hardware=cleanup88Authorized();r88Media_=r88RateReady_=false;r88Rates_={};radioReady_=false;r88Channel_=0;(void)rtw88_phy_radio_set_associated(&r88PHY_,0);coex88Stop();if(hardware&&cleanup88Authorized()){(void)r88Write(this,0x522,1,255);if(r88Core_.firmware.identified)(void)rtw88_boot_stop(&r88Core_);}else r88Core_.firmware.powered=r88Core_.firmware.firmware_running=0;rtw88_phy_radio_invalidate(&r88PHY_);r88PHY_.tables_loaded=r88MAC_.mac_ready=r88Station_.initialized=0;(void)core_.sc_newstate(ic,IEEE80211_S_INIT,-1);core_.core_error=e;return e;};
+ auto rollback=[&](int e)->int{r88Bfee_=false;r88BfeeCSIRate_=0;bool hardware=cleanup88Authorized();r88Media_=r88RateReady_=false;r88Rates_={};radioReady_=false;r88Channel_=0;(void)rtw88_phy_radio_set_associated(&r88PHY_,0);coex88Stop();if(hardware&&cleanup88Authorized()){(void)r88Write(this,0x522,1,255);if(r88Core_.firmware.identified)(void)rtw88_boot_stop(&r88Core_);}else r88Core_.firmware.powered=r88Core_.firmware.firmware_running=0;rtw88_phy_radio_invalidate(&r88PHY_);r88PHY_.tables_loaded=r88MAC_.mac_ready=r88Station_.initialized=0;(void)core_.sc_newstate(ic,IEEE80211_S_INIT,-1);core_.core_error=e;return e;};
  if(error)return rollback(error);if(!ic->ic_bss||!ic->ic_bss->ni_chan||ic->ic_bss->ni_chan==IEEE80211_CHAN_ANYC)return rollback(EINVAL);
  unsigned channel=ieee80211_chan2ieee(ic,ic->ic_bss->ni_chan);if(channel>255||!permits88Channel((uint8_t)channel))return rollback(ENOTSUP);
  if(r88Coex_&&(state==IEEE80211_S_SCAN||state==IEEE80211_S_AUTH)){if((r88Channel_>14)!=(channel>14))error=coex88Notify(RTW88_CX_SWITCH_BAND,state,(uint8_t)channel);if(!error&&state==IEEE80211_S_SCAN&&(!r88CoexScanning_||(r88Channel_>14)!=(channel>14)))error=coex88Notify(RTW88_CX_SCAN_START,state,(uint8_t)channel);if(!error&&state==IEEE80211_S_AUTH)error=coex88Notify(RTW88_CX_ASSOC_START,state,(uint8_t)channel);if(error)return rollback(error);}
@@ -303,15 +331,103 @@ int RTWUSBController::state88(ieee80211com*ic,ieee80211_state state,int arg){
   rtw88_station_rate rate{};error=prepare88Rate(&rate);
   uint8_t media[8]{};if(!error&&!rtw_8814au_make_media_status(1,media))error=EINVAL;
   if(!error)error=rtw88_station_h2c(&r88Station_,rate.command);if(!error)error=rtw88_station_h2c(&r88Station_,media);if(!error)r88Media_=true;
-  if(!error)error=r88Write(this,0x554,2,n->ni_intval);if(!error)error=station88Hardware(state);if(!error){r88Rates_=rate;update88EDCA(ic);if(r88Core_.firmware.last_error)error=r88Core_.firmware.last_error;else if(core_.core_error)error=core_.core_error;}}
+  if(!error)error=r88Write(this,0x554,2,n->ni_intval);if(!error)error=station88Hardware(state);if(!error){r88Rates_=rate;update88EDCA(ic);if(r88Core_.firmware.last_error)error=r88Core_.firmware.last_error;else if(core_.core_error)error=core_.core_error;}
+  /* mejoras (1.1.2-tr.6): optional; a failure leaves the link without beamforming. */
+  if(!error&&bfee88Enable()){++r88BfeeFailures_;bfee88Disable();}}
  if(error)return rollback(error);error=core_.sc_newstate(ic,state,arg);if(error)return rollback(error);
  if(state==IEEE80211_S_RUN){error=rtw88_phy_radio_set_associated(&r88PHY_,1);if(!error&&r88Coex_)error=coex88Notify(RTW88_CX_ASSOC_FINISH,state);if(!error&&r88Coex_)error=coex88Notify(RTW88_CX_MEDIA_CONNECT,state);if(!error&&r88Coex_&&family_==RTW_WIFI_RTL8822CU&&!r88SMPSPending_)error=send88SMPS(r88CoexOneSS_);if(error)return rollback(error);r88RateReady_=true;nextCalibration(this);coex88Schedule();}if(state==IEEE80211_S_SCAN)nextScan(this);return 0;
+}
+/* mejoras (1.1.2-tr.6): VHT SU beamformee on 8822BU, as Linux rtw88 (bf.c rtw_bf_phy_init, rtw_bf_enable_bfee_su,
+   rtw_bf_remove_bfee_su, rtw_bf_cfg_csi_rate; rtw8822b.c rtw8822b_phy_bf_init). Only when the AP is an SU beamformer;
+   the MAC answers the AP's NDPA/NDP sounding with a compressed beamforming report by itself. Register set 0 only. */
+int RTWUSBController::write88Mask(uint16_t a,unsigned w,uint32_t m,uint32_t v){if(!m)return EINVAL;uint32_t x=0;int e=r88Read(this,a,w,&x);if(e)return e;unsigned s=0;while(!((m>>s)&1U))++s;x=(x&~m)|((v<<s)&m);return r88Write(this,a,w,x);}
+int RTWUSBController::bfee88Enable(){
+ r88Bfee_=false;r88BfeeCSIRate_=0;const auto*n=core_.sc_ic.ic_bss;r88BfeePeerCaps_=n?n->ni_vhtcaps_peer:0;
+ if(!wide88Family()||!r88VHT_||!n||!(core_.sc_ic.ic_vhtcaps&IEEE80211_VHTCAP_SU_BEAMFORMEE_CAPABLE)||!(r88BfeePeerCaps_&IEEE80211_VHTCAP_SU_BEAMFORMER_CAPABLE))return 0;
+ uint32_t t=0;int e=r88Read(this,0x14c0,4,&t);if(e)return e;                 /* REG_MU_TX_CTL */
+ t|=1U<<16;t=(t&~(0xfU<<12))|(0xaU<<12);t&=~((1U<<7)|0x3fU);                 /* P1 wait state, MU retry 10, MU-MIMO off, no MU STA */
+ e=r88Write(this,0x14c0,4,t);
+ if(!e)e=r88Write(this,0x167c,1,(3U<<4)|(1U<<6));                            /* REG_WMAC_MU_BF_OPTION: ack policy 3 */
+ if(!e)e=r88Write(this,0x1680,2,0);                                          /* REG_WMAC_MU_BF_CTL */
+ if(!e)e=write88Mask(0x42c,4,1U<<30,1);                                      /* REG_TXBF_CTRL: BIT_USE_NDPA_PARAMETER */
+ if(!e)e=r88Write(this,0x45f,1,0x10);                                        /* REG_NDPA_OPT_CTRL: NDPA rate */
+ if(!e)e=write88Mask(0x6dc,4,0x3fU<<24,0x04);                                /* REG_BBPSF_CTRL: CSI rate 6M */
+ if(!e)e=r88Write(this,0x1c94,4,0xafffafffU);                                /* 8822B grouping bitmap */
+ const uint8_t nc=core_.nrxchains>1?1:0,nr=(uint8_t)((r88BfeePeerCaps_&IEEE80211_VHTCAP_SOUNDING_DIMENSIONS_MASK)>>IEEE80211_VHTCAP_SOUNDING_DIMENSIONS_SHIFT);
+ if(!e)e=write88Mask(0x718,1,0x9fU,0x9bU);                                   /* REG_SND_PTCL_CTRL: sounding */
+ for(unsigned i=0;!e&&i<6;i++)e=r88Write(this,(uint16_t)(0x6e4+i),1,n->ni_bssid[i]); /* REG_ASSOCIATED_BFMER0_INFO */
+ if(!e)e=r88Write(this,0x6f4,2,(3U<<10)|(1U<<8)|((uint32_t)nr<<3)|nc);       /* REG_TX_CSI_RPT_PARAM_BW20: 11ac codebook, no grouping */
+ if(!e)e=r88Write(this,0x71b,1,0x70);                                        /* NDP RX standby timer */
+ if(e)return e;r88Bfee_=true;r88BfeeSoundDim_=nr;++r88BfeeEnables_;return bfee88CSIRate();
+}
+int RTWUSBController::bfee88CSIRate(){
+ if(!r88Bfee_||!r88RSSIValid_)return 0;const uint8_t want=r88RSSI_>=40?11:8; /* DESC_RATE54M : DESC_RATE24M */
+ if(want==r88BfeeCSIRate_)return 0;uint32_t c=0,rr=0;int e=r88Read(this,0x6dc,4,&c);if(!e)e=r88Read(this,0x440,2,&rr);if(e)return e;
+ c=(c&~(0x3fU<<24))|(11U<<24);if(want==11)rr|=1U<<11;else rr&=~(1U<<11);   /* like Linux: CSI rate field 54M, RRSR decides */
+ e=r88Write(this,0x440,2,rr);if(!e)e=r88Write(this,0x6dc,4,c);if(!e)r88BfeeCSIRate_=want;return e;
+}
+void RTWUSBController::bfee88Disable(){
+ if(!r88Bfee_)return;r88Bfee_=false;r88BfeeCSIRate_=0;if(ioError(this)||r88Core_.firmware.last_error||!r88Core_.firmware.firmware_running)return;
+ (void)write88Mask(0x718,1,0x9fU,0x98U);(void)r88Write(this,0x6e4,4,0);(void)r88Write(this,0x6e8,2,0);(void)r88Write(this,0x6f4,2,0);
+}
+/* mejoras (1.1.2-tr.8): Linux rtw88 rtw_phy_dynamic_mechanism for 8822BU, every 2 s while associated.
+   stats88 = rtw8822b_false_alarm_statistics (FA, CCA and CRC counters, then the same counter resets);
+   dig88 = rtw_phy_dig (linked thresholds, damping, bounds from the AP RSSI, chip dig_min 0x1c, IGI in 0xc50/0xe50).
+   Without DIG the IGI stays at the table value, which can saturate the receiver with a strong AP.
+   Opt-out: "RTW88NoDIG" in the driver personality (statistics still run). */
+int RTWUSBController::stats88(){
+ if(family_!=RTW_WIFI_RTL8822BU)return 0;
+ static const uint16_t crcReg[4]={0xf04,0xf14,0xf10,0xf0c};                   /* REG_CRC_CCK, _OFDM, _HT, _VHT */
+ uint32_t c808=0,cck=0,ofdm=0,cca=0,ccca=0,crc[4]{};
+ int e=r88Read(this,0x808,4,&c808);if(!e)e=r88Read(this,0xa5c,2,&cck);if(!e)e=r88Read(this,0xf48,2,&ofdm);if(!e)e=r88Read(this,0xf08,4,&cca);
+ const bool cckOn=(c808&(1U<<28))!=0;if(!e&&cckOn)e=r88Read(this,0xfcc,4,&ccca);
+ for(unsigned i=0;!e&&i<4;i++)e=r88Read(this,crcReg[i],4,&crc[i]);
+ if(e)return e;
+ r88FA_=(ofdm&0xffffU)+(cckOn?(cck&0xffffU):0);r88CCA_=(cca>>16)+(cckOn?(ccca&0xffffU):0);
+ for(unsigned i=0;i<4;i++){r88CRCOK_[i]+=crc[i]&0xffffU;r88CRCErr_[i]+=crc[i]>>16;}
+ e=write88Mask(0x9a4,4,1U<<17,1);if(!e)e=write88Mask(0x9a4,4,1U<<17,0);      /* REG_FAS */
+ if(!e)e=write88Mask(0xa2c,4,1U<<15,0);if(!e)e=write88Mask(0xa2c,4,1U<<15,1); /* REG_RXDESC */
+ if(!e)e=write88Mask(0xb58,4,1U,1);if(!e)e=write88Mask(0xb58,4,1U,0);         /* REG_CNTRST */
+ return e;
+}
+bool RTWUSBController::dig88Damping(uint8_t rssi){
+ auto&d=r88Dig_;
+ if(d.damping){const uint8_t diff=rssi>d.dampRSSI?rssi-d.dampRSSI:d.dampRSSI-rssi;if(diff>3||d.dampCount++>20){d.damping=false;return false;}return true;}
+ const uint8_t*g=d.igi;const uint16_t*f=d.fa;bool damp=false;
+ switch(d.bitmap&0xf){
+ case 5:damp=g[0]>g[1]&&g[2]>g[3]&&g[0]-g[1]>=2&&g[2]-g[3]>=2&&f[0]>500&&f[1]<250&&f[2]>500&&f[3]<250;break;
+ case 9:damp=g[0]>g[1]&&g[3]>g[2]&&g[0]-g[1]>=4&&g[3]-g[2]>=2&&f[0]>500&&f[1]<250&&f[2]<250&&f[3]>500;break;
+ default:return false;}
+ if(damp){d.damping=true;d.dampCount=0;d.dampRSSI=rssi;}
+ return damp;
+}
+int RTWUSBController::dig88(){
+ if(family_!=RTW_WIFI_RTL8822BU||!r88RSSIValid_||getProperty("RTW88NoDIG"))return 0;
+ auto&d=r88Dig_;const uint8_t rssi=r88RSSI_;
+ if(!d.active){uint32_t v=0;int e=r88Read(this,0xc50,4,&v);if(e)return e;d=Dig88State{};d.active=true;d.initIGI=(uint8_t)(v&0x7fU);d.igi[0]=d.initIGI;d.preRSSI=rssi;}
+ const uint16_t fa=(uint16_t)(r88FA_>0xffffU?0xffffU:r88FA_);
+ if(dig88Damping(rssi)){d.preRSSI=rssi;return 0;}
+ static const uint16_t th[3]={750,500,250};uint8_t step[3]={4,3,2};if(d.preRSSI>rssi){step[0]=6;step[1]=4;step[2]=2;}
+ const uint8_t pre=d.igi[0];int cur=pre;for(unsigned l=0;l<3;l++)if(fa>th[l]){cur+=step[l];break;}cur-=2;
+ const int digMin=0x1c,digMid=0x40;const int minR=rssi>digMin?rssi:digMin;int digMax=0x5a;if(minR+15<digMax)digMax=minR+15;
+ const int lower=minR<digMid?minR:digMid;int upper=lower+15;if(upper>digMax)upper=digMax;if(upper<digMin)upper=digMin;
+ if(cur<lower)cur=lower;if(cur>upper)cur=upper;
+ d.bitmap=(uint8_t)(((d.bitmap<<1)&0xfe)|(cur>pre?1:0));
+ for(unsigned i=3;i>0;i--){d.igi[i]=d.igi[i-1];d.fa[i]=d.fa[i-1];}d.igi[0]=(uint8_t)cur;d.fa[0]=fa;d.preRSSI=rssi;
+ if(cur==pre)return 0;
+ int e=write88Mask(0xc50,4,0x7fU,(uint32_t)cur);if(!e)e=write88Mask(0xe50,4,0x7fU,(uint32_t)cur);if(!e)++r88DigWrites_;
+ return e;
+}
+void RTWUSBController::dig88Reset(){
+ if(!r88Dig_.active)return;const uint8_t init=r88Dig_.initIGI;r88Dig_=Dig88State{};
+ if(ioError(this)||r88Core_.firmware.last_error||!r88Core_.firmware.firmware_running)return;
+ (void)write88Mask(0xc50,4,0x7fU,init);(void)write88Mask(0xe50,4,0x7fU,init);
 }
 void RTWUSBController::update88EDCA(ieee80211com*ic){if(!ic||!ic->ic_softc)return;auto*core=static_cast<rtwn_softc*>(ic->ic_softc);auto*s=owner(core->sc_ops.cookie);if(!s->r88Station_.initialized||!s->r88Channel_)return;if(!s->cleanup88Authorized(true)){s->r88Channel_=0;if(s->core_.sc_newstate)(void)s->core_.sc_newstate(ic,IEEE80211_S_INIT,-1);return;}if(r88RadioState(s,s->r88Channel_)!=2)return;const auto*n=ic->ic_bss;const auto*parameters=((ic->ic_flags&IEEE80211_F_QOS)&&n&&(n->ni_flags&IEEE80211_NODE_QOS))?ic->ic_edca_ac:ieee80211_edca_table[s->r88Channel_>14?IEEE80211_MODE_11A:(s->station88Rates(false)&0xff0)?IEEE80211_MODE_11G:IEEE80211_MODE_11B];rtw88_station_edca a[4]{};for(unsigned i=0;i<4;i++){const auto&p=parameters[i];a[i]={p.ac_aifsn,p.ac_ecwmin,p.ac_ecwmax,p.ac_txoplimit};}int e=rtw88_station_set_edca(&s->r88Station_,(ic->ic_flags&IEEE80211_F_SHSLOT)!=0,a);if(e)core->core_error=e;}
 bool RTWUSBController::uses88FirmwareRate() const{return is88Family()&&!core_.core_error&&coex88Ready()&&running_&&!stopping_&&present_&&!sleeping_&&usbError_==kIOReturnSuccess&&r88Media_&&r88RateReady_&&r88Station_.initialized&&r88MAC_.mac_ready&&!r88Core_.firmware.last_error&&core_.sc_ic.ic_state==IEEE80211_S_RUN&&core_.sc_ic.ic_bss&&r88RadioState(const_cast<RTWUSBController*>(this),r88Channel_)==2;}
 /* Linux rtw88/reg.h: 3081 FW_READY excludes CPU clock bits12/13. This
  * matches rtw88_fw_download; the legacy 8051 0xc6 format does not apply. */
-int RTWUSBController::tick88(){if(core_.core_error)return core_.core_error;if(core_.sc_ic.ic_state!=IEEE80211_S_RUN)return 0;if(!uses88FirmwareRate())return ENXIO;uint32_t ready=0;int e=r88Read(this,0x80,2,&ready);if(!e&&(ready&0xcfffU)!=0xc078U){r88Core_.firmware.firmware_running=0;e=EIO;}if(!e)e=rtw88_phy_radio_thermal_track(&r88PHY_);if(!e&&r88RSSIValid_){uint8_t command[8]{};if(!rtw_8814au_make_rssi_monitor(r88RSSI_,command))return EINVAL;e=rtw88_station_h2c(&r88Station_,command);}return e;}
+int RTWUSBController::tick88(){if(core_.core_error)return core_.core_error;if(core_.sc_ic.ic_state!=IEEE80211_S_RUN)return 0;if(!uses88FirmwareRate())return ENXIO;uint32_t ready=0;int e=r88Read(this,0x80,2,&ready);if(!e&&(ready&0xcfffU)!=0xc078U){r88Core_.firmware.firmware_running=0;e=EIO;}if(!e)e=rtw88_phy_radio_thermal_track(&r88PHY_);if(!e&&r88Bfee_&&bfee88CSIRate())++r88BfeeFailures_;if(!e&&(stats88()||dig88()))++r88DigFailures_;if(!e&&r88RSSIValid_){uint8_t command[8]{};if(!rtw_8814au_make_rssi_monitor(r88RSSI_,command))return EINVAL;e=rtw88_station_h2c(&r88Station_,command);}return e;}
 rtw_packet_error RTWUSBController::decode88USBFrame(rtw_rx_iterator*it,rtw_8192eu_rx_frame*out,uint8_t*report) const{if(out)memset(out,0,sizeof(*out));if(report)*report=0;if(!out||!report)return RTW_PACKETS_BAD_ARGUMENT;rtw_8814au_rx_frame frame{};auto e=rtw88_rx_next(&r88RX_,it,&frame);if(e!=RTW_PACKETS_OK)return e;out->payload=frame.packet;if(!frame.is_c2h){if(out->payload.mpdu_length<=4)return RTW_PACKETS_MALFORMED;out->payload.mpdu_length-=4;}out->security_code=frame.security_code;out->sw_decrypt_required=frame.sw_decrypt_required;out->report_is_c2h=frame.is_c2h;*report=frame.is_c2h?6:0;return e;}
 int RTWUSBController::sample88RSSI(const rtw_rx_packet&p){const auto*ap=core_.sc_ic.ic_bss;if(ap&&core_.sc_ic.ic_state==IEEE80211_S_RUN&&p.mpdu&&p.mpdu_length>=24&&(p.mpdu[0]&IEEE80211_FC0_TYPE_MASK)==IEEE80211_FC0_TYPE_DATA&&!(p.mpdu[4]&1)&&rtw_signal_from_ap(p.mpdu,p.mpdu_length,ap->ni_bssid)){r88CoexRXBytes_+=p.mpdu_length;if(r88CoexRXPackets_!=UINT32_MAX)++r88CoexRXPackets_;r88CoexRXRate_=p.rate_index;}rtw88_rx_phy_sample sample{};if(!rtw88_rx_parse_phy(&r88RX_,&p,&sample))return 0;const auto*n=core_.sc_ic.ic_bss;if(n&&core_.sc_ic.ic_state==IEEE80211_S_RUN&&rtw_signal_from_ap(p.mpdu,p.mpdu_length,n->ni_bssid)){r88RSSI_=sample.rssi;r88RSSIValid_=true;}return sample.signal_dbm;}
 void RTWUSBController::handle88C2H(const uint8_t*b,size_t n){if(core_.core_error)return;if(handle88SMPSReport(b,n))return;if(r88Coex_){auto input=coex88Input(core_.sc_ic.ic_state);int error=rtw88_coex_c2h(r88Coex_,b,n,&input);if(!error){coex88Schedule();return;}if(error==EINVAL){++rateControl_.invalid;return;}if(error!=ENOMSG){core_.core_error=error;coex88Schedule();return;}}uint8_t rate=0;int parsed=parse88RateReport(b,n,&rate);if(parsed<0){++rateControl_.invalid;return;}if(!parsed){++rateControl_.ignored;return;}if(uses88FirmwareRate()){int e=rtw88_phy_radio_set_tx_rate(&r88PHY_,rate);if(e){core_.core_error=e;return;}++rateControl_.reports;rateControl_.finalRate=rate;r88CoexTXRate_=rate;}}

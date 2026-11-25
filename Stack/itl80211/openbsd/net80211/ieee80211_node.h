@@ -413,6 +413,7 @@ struct ieee80211_node {
     
     /* VHT state */
     uint32_t        ni_vhtcaps;
+    uint32_t        ni_vhtcaps_peer;    /* mejoras (1.1.2-tr.6): AP VHT caps as advertised */
     uint16_t        ni_vht_basicmcs;
     uint16_t        ni_vht_pad2;
     struct ieee80211_vht_mcs_info    ni_vht_mcsinfo;

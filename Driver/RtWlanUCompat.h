@@ -207,6 +207,6 @@ typedef struct RTWlanUOidFrame {
 
 /* Fixed driver version string surfaced in the utility About panel; also
  * published as the registry property "RtWlanDriverVersion". */
-#define RTWLANU_DRIVER_VERSION "1.1.2-tr.5"
+#define RTWLANU_DRIVER_VERSION "1.1.2-tr.8"
 
 #endif /* RTWLANU_COMPAT_H */

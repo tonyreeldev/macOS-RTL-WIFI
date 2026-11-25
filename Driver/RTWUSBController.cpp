@@ -1004,6 +1004,23 @@ void RTWUSBController::publishRateControlDiagnostics() {
     publishDiagnosticCounter("RTWDiagVHTSGI80Negotiated",(uint64_t)((auHT&&auRateConfig_.vht&&auRateConfig_.bandwidth_mhz==80&&auRateConfig_.short_gi)||(acHT&&w88==80&&hwRate->sgi20)));
     publishDiagnosticCounter("RTWDiag88WideFallbacks",r88WideFallbacks_);
     publishDiagnosticCounter("RTWDiag88CenterChannel",r88Center_);
+    publishDiagnosticCounter("RTWDiag88BfeeActive",(uint64_t)r88Bfee_);
+    publishDiagnosticCounter("RTWDiag88BfeePeerVHTCaps",r88BfeePeerCaps_);
+    publishDiagnosticCounter("RTWDiag88BfeeSoundDim",r88BfeeSoundDim_);
+    publishDiagnosticCounter("RTWDiag88BfeeCSIRate",r88BfeeCSIRate_);
+    publishDiagnosticCounter("RTWDiag88BfeeEnables",r88BfeeEnables_);
+    publishDiagnosticCounter("RTWDiag88BfeeFailures",r88BfeeFailures_);
+    publishDiagnosticCounter("RTWDiag88FalseAlarms",r88FA_);
+    publishDiagnosticCounter("RTWDiag88CCA",r88CCA_);
+    publishDiagnosticCounter("RTWDiag88IGI",r88Dig_.active?r88Dig_.igi[0]:0);
+    publishDiagnosticCounter("RTWDiag88IGIInit",r88Dig_.initIGI);
+    publishDiagnosticCounter("RTWDiag88DigWrites",r88DigWrites_);
+    publishDiagnosticCounter("RTWDiag88DigFailures",r88DigFailures_);
+    publishDiagnosticCounter("RTWDiag88DigDamping",(uint64_t)r88Dig_.damping);
+    publishDiagnosticCounter("RTWDiag88RSSI",r88RSSIValid_?r88RSSI_:0);
+    {static const char*const ok[4]={"RTWDiag88CRCOkCCK","RTWDiag88CRCOkOFDM","RTWDiag88CRCOkHT","RTWDiag88CRCOkVHT"};
+     static const char*const er[4]={"RTWDiag88CRCErrCCK","RTWDiag88CRCErrOFDM","RTWDiag88CRCErrHT","RTWDiag88CRCErrVHT"};
+     for(unsigned i=0;i<4;i++){publishDiagnosticCounter(ok[i],r88CRCOK_[i]);publishDiagnosticCounter(er[i],r88CRCErr_[i]);}}
     publishDiagnosticCounter("RTWDiagHTChannelWidthMHz",(uint64_t)(r23HT?20:buHT?buRate_.width_mhz:fuHT?fuRate_.width_mhz:duHT?20:auHT?auRateConfig_.bandwidth_mhz:acHT?w88:uses8188FirmwareRate()?20:usesFirmwareRate()?(core_.rate_config.bw40?40:20):0));
     publishDiagnosticCounter("RTWDiagHTTXStreams",htNegotiated?(uint64_t)(r23HT||buHT?1:fuHT?((fuRate_.mask&0x0ff00000U)?2:1):duHT?((duMAC_.rates.mask&0x0ff00000U)?2:1):auHT?auRateConfig_.streams:acHT?hwRate->tx_streams:core_.rate_config.tx_streams):0);
     publishDiagnosticCounter("RTWDiagHTRAID",htNegotiated?(uint64_t)(r23HT?r23Rates_.raid:buHT?buRate_.rate_id:fuHT?fuRate_.rate_id:duHT?duMAC_.rates.raid:auHT?auRateConfig_.rate_id:acHT?hwRate->rate_id:core_.rate_config.raid):0);

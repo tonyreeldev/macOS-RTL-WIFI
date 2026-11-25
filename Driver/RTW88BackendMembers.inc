@@ -35,6 +35,20 @@
     uint8_t r88Center_=0,r88Width_=20,r88Index_=0;
     bool r88VHT_=false,r88WideCaps_=false;
     uint32_t r88WideFallbacks_=0;
+    /* mejoras (1.1.2-tr.6): VHT SU beamformee. */
+    bool r88Bfee_=false;uint8_t r88BfeeSoundDim_=0,r88BfeeCSIRate_=0;uint32_t r88BfeePeerCaps_=0,r88BfeeEnables_=0,r88BfeeFailures_=0;
+    int write88Mask(uint16_t,unsigned,uint32_t,uint32_t);
+    int bfee88Enable();
+    int bfee88CSIRate();
+    void bfee88Disable();
+    /* mejoras (1.1.2-tr.8): Linux rtw88 phy.c dynamic mechanism on 8822BU: false alarm/CCA/CRC statistics and DIG. */
+    struct Dig88State{bool active=false,damping=false;uint8_t initIGI=0,igi[4]{},bitmap=0,preRSSI=0,dampRSSI=0,dampCount=0;uint16_t fa[4]{};};
+    Dig88State r88Dig_{};
+    uint32_t r88FA_=0,r88CCA_=0,r88DigWrites_=0,r88DigFailures_=0;uint64_t r88CRCOK_[4]{},r88CRCErr_[4]{};
+    int stats88();
+    int dig88();
+    bool dig88Damping(uint8_t rssi);
+    void dig88Reset();
     bool wide88Family() const;
     uint32_t channel88Modes(uint8_t) const;
     void refresh88Modes();
@@ -63,6 +77,7 @@
     static int r88Bulk(void*,uint8_t,const uint8_t*,size_t);
     static unsigned r88RadioState(void*,uint8_t);
     int bootstrap88(bool);
+    int usb3Switch88();
     int attach88(),start88(),set88Channel(uint8_t,bool),send88Startup();
     void stop88(),release88Storage();
     int state88(ieee80211com*,ieee80211_state,int);

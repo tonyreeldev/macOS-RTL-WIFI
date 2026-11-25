@@ -2585,6 +2585,7 @@ ieee80211_setup_vhtcaps(struct ieee80211com *ic, struct ieee80211_node *ni, cons
     uint32_t new_vhtcap = 0, peer_vhtcap;
     /* vht capability */
     peer_vhtcap = le32dec(ie + 2);
+    ni->ni_vhtcaps_peer = peer_vhtcap; /* mejoras (1.1.2-tr.6): ni_vhtcaps below drops the AP beamformer bits */
     /* suppmcs */
     rx_mcs_map = le16dec(ie + 6);
     rx_highest = le16dec(ie + 8);
