@@ -14,6 +14,7 @@ rtw88_coex_input RTWUSBController::coex88Input(ieee80211_state target,uint8_t ch
     rtw88_coex_input input{};input.now_ms=nowMS();
     input.primary=input.center=channel?channel:r88Channel_?r88Channel_:1;
     input.width_mhz=20;input.connected=target==IEEE80211_S_RUN;
+    if((!channel||channel==r88Channel_)&&r88Channel_&&r88Center_&&r88Width_!=20){input.center=r88Center_;input.width_mhz=r88Width_;}
     input.scanning=target==IEEE80211_S_SCAN;input.rssi_percent=r88RSSIValid_?r88RSSI_:0;
     input.beacon_interval=n?n->ni_intval:0;
     input.scan_ap_count=(uint16_t)(ic.ic_nnodes<0?0:ic.ic_nnodes>65535?65535:ic.ic_nnodes);
@@ -117,6 +118,13 @@ int RTWUSBController::prepare88Rate(rtw88_station_rate*out) const
     const bool ht=(n->ni_flags&IEEE80211_NODE_HT)!=0;unsigned streams=r88Core_.board.tx_streams;
     if(ht){mcs[0]=n->ni_rxmcs[0];mcs[1]=n->ni_rxmcs[1];
         if(r88CoexOneSS_||((n->ni_htcaps&IEEE80211_HTCAP_SMPS_MASK)>>IEEE80211_HTCAP_SMPS_SHIFT)!=IEEE80211_HTCAP_SMPS_DIS){mcs[1]=0;streams=1;}}
+    if(ht&&r88Channel_>14&&(r88Width_!=20||r88VHT_)){
+        /* mejoras (1.1.2-tr.2): HT40 / VHT20-80 rate table. */
+        bool sgi;if(r88Width_==80)sgi=(ic.ic_vhtcaps&IEEE80211_VHTCAP_SHORT_GI_80)&&(n->ni_vhtcaps&IEEE80211_VHTCAP_SHORT_GI_80);
+        else{uint32_t f=r88Width_==40?IEEE80211_HTCAP_SGI40:IEEE80211_HTCAP_SGI20;sgi=(ic.ic_htcaps&f)&&(n->ni_htcaps&f);}
+        return rtw88_station_prepare_wide(family_,r88Channel_,streams,station88Rates(false),mcs,r88VHT_?1:0,
+            le16toh(n->ni_vht_mcsinfo.rx_mcs_map),r88Width_,sgi?1:0,out);
+    }
     return rtw88_station_prepare_ht20(family_,r88Channel_,streams,station88Rates(false),mcs,ht,
         (ic.ic_htcaps&IEEE80211_HTCAP_SGI20)!=0,(n->ni_htcaps&IEEE80211_HTCAP_SGI20)!=0,out);
 }

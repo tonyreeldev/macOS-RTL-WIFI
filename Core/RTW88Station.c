@@ -158,3 +158,30 @@ int rtw88_station_prepare_ht20(rtw_wifi_family f,uint8_t ch,unsigned streams,uin
     !rtw_8814au_build_ra_commands(&value.rates,1,value.command,high))return EINVAL;
  *out=value;return 0;
 }
+
+int rtw88_station_prepare_wide(rtw_wifi_family f,uint8_t ch,unsigned streams,uint16_t legacy,
+ const uint8_t mcs[2],int vht,uint16_t map,unsigned width,int sgi,rtw88_station_rate*out)
+{
+ rtw88_station_rate v;uint64_t mask;unsigned i,top=0;
+ if(!out||!mcs||!family(f)||!channel(ch)||ch<=14||streams<1||streams>(f==RTW_WIFI_RTL8821CU?1U:2U)||
+    !(legacy&0xff0U)||(legacy&0xf00fU)||(vht!=0&&vht!=1)||(sgi!=0&&sgi!=1)||
+    (width!=20&&width!=40&&width!=80)||(width==80&&!vht))return EINVAL;
+ memset(&v,0,sizeof(v));mask=legacy;
+ if(vht){uint32_t m=0;unsigned nss;
+  for(nss=0;nss<streams;nss++){unsigned sup=(map>>(2U*nss))&3U;uint32_t bits;if(sup==3U)break;
+   bits=sup==0U?0xffU:sup==1U?0x1ffU:0x3ffU;if(width==20)bits&=0xffU|(sup?0x100U:0U);m|=bits<<(10U*nss);}
+  if(!m)return EINVAL;mask|=(uint64_t)m<<12;v.rates.tx_streams=(uint8_t)((m>>10)?2U:1U);
+  v.rates.rate_id=(uint8_t)(v.rates.tx_streams==2U?9U:10U);
+ }else{uint32_t h=mcs[0];if(streams==2U)h|=(uint32_t)mcs[1]<<8;if(!h)return EINVAL;
+  mask|=(uint64_t)h<<12;v.rates.tx_streams=(uint8_t)((h&0xff00U)?2U:1U);
+  v.rates.rate_id=(uint8_t)(v.rates.tx_streams==2U?4U:5U);}
+ for(i=0;i<32U;i++)if(mask&(UINT64_C(1)<<i))top=i;
+ v.rates.mask=mask;v.rates.ht=1;v.rates.sgi20=(uint8_t)sgi;v.rates.init_ra_level=1;
+ v.rates.initial_rate=(uint8_t)(vht&&top>=12U?44U+(top-12U):top);
+ v.width_code=(uint8_t)(width==80?2U:width==40?1U:0U);v.vht=(uint8_t)vht;
+ v.command[0]=0x40;v.command[2]=(uint8_t)(v.rates.rate_id|(1U<<5)|(sgi?0x80U:0U));
+ /* BW_MODE, no LDPC, update, VHT_EN, disable power training. */
+ v.command[3]=(uint8_t)(v.width_code|(vht?0x10U:0U)|0x40U);
+ v.command[4]=(uint8_t)mask;v.command[5]=(uint8_t)(mask>>8);v.command[6]=(uint8_t)(mask>>16);v.command[7]=(uint8_t)(mask>>24);
+ *out=v;return 0;
+}

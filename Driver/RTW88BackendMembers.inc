@@ -31,6 +31,17 @@
     void *r88Storage_=nullptr;
     bool r88BoardKnown_=false,r88Media_=false,r88RateReady_=false,r88RSSIValid_=false;
     uint8_t r88MACAddress_[6]{},r88Channel_=0,r88RSSI_=0;
+    /* mejoras (1.1.2-tr.2): operating geometry for 5 GHz HT40/VHT80. */
+    uint8_t r88Center_=0,r88Width_=20,r88Index_=0;
+    bool r88VHT_=false,r88WideCaps_=false;
+    uint32_t r88WideFallbacks_=0;
+    bool wide88Family() const;
+    uint32_t channel88Modes(uint8_t) const;
+    void refresh88Modes();
+    int peer88Operating(uint8_t&center,uint8_t&width,uint8_t&index,bool&vht) const;
+    int set88Operating(uint8_t primary,uint8_t center,uint8_t width,uint8_t index,bool calibrate);
+    bool accepts88ReceiveRate(const rtw_rx_packet&) const;
+    int parse88RateReport(const uint8_t*,size_t,uint8_t*) const;
     uint16_t r88PacketSequence_=0;
     rtw88_coex *r88Coex_=nullptr;
     IOTimerEventSource *r88CoexTimer_=nullptr;

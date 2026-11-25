@@ -43,9 +43,15 @@ int rtw88_station_set_edca(rtw88_station_context*,int short_slot,
 int rtw88_station_h2c(rtw88_station_context*,const uint8_t command[8]);
 /* Common Linux rtw88 HT20 rate/H2C wire format, also used by8814A. This
  * shares a pure codec, never a device context. No VHT/40/80MHz claim. */
-typedef struct {rtw_8814au_rate_config rates;uint8_t command[8];} rtw88_station_rate;
+typedef struct {rtw_8814au_rate_config rates;uint8_t command[8];uint8_t width_code,vht;} rtw88_station_rate;
 int rtw88_station_prepare_ht20(rtw_wifi_family,uint8_t channel,unsigned tx_streams,uint16_t legacy,
  const uint8_t mcs[2],int ht,int local_sgi,int peer_sgi,rtw88_station_rate*);
+/* mejoras (1.1.2-tr.2): 5 GHz HT40/VHT20/40/80 RA_INFO, Linux rtw88 fw.c wire
+ * format (BW_MODE, VHT_EN). VHT mask: 10 bits per stream from bit 12, MCS9
+ * dropped at 20 MHz. rates.initial_rate is a descriptor rate (VHT = 44+).
+ * rates.sgi20 carries the short-GI decision of the operating width. */
+int rtw88_station_prepare_wide(rtw_wifi_family,uint8_t channel,unsigned tx_streams,uint16_t legacy,
+ const uint8_t mcs[2],int vht,uint16_t peer_vht_rx_map,unsigned width_mhz,int sgi,rtw88_station_rate*);
 #ifdef __cplusplus
 }
 #endif

@@ -14,6 +14,12 @@
  * No USB timing, DMA register or retry-budget change is implied. */
 static inline uint32_t rtw_usb_rx_capacity(rtw_wifi_family family)
 {
-    return family==RTW_WIFI_RTL8814AU?32768U:16384U;
+    /* mejoras (1.1.2-tr.3): rtw88 chips (8821CU/8822BU/8822CU) are programmed
+     * with the same 0x2005 threshold in RTW88MAC.c (REG_RXDMA_AGG_PG_TH), so a
+     * 16 KiB read split aggregates >16 KiB: the read ended TRUNCATED and the
+     * next one started mid-frame (MALFORMED at offset 0), dropping frames.
+     * Linux rtw88 reads 32768 bytes (usb.h RTW_USB_MAX_RECVBUF_SZ). */
+    return (family==RTW_WIFI_RTL8814AU||family==RTW_WIFI_RTL8821CU||
+            family==RTW_WIFI_RTL8822BU||family==RTW_WIFI_RTL8822CU)?32768U:16384U;
 }
 #endif

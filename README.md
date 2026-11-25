@@ -1,7 +1,7 @@
 # macOS-RTL-WIFI – mejoras (rama `mejoras`, versión `-tr`)
 
-> Fork personal de [chris1111/macOS-RTL-WIFI](https://github.com/chris1111/macOS-RTL-WIFI) con cambios en el **driver** (`1.1.2-tr.1`) y en la **app de la barra de menús RTLWiFiBar** (`8.8.4-tr.2`). No es un proyecto oficial ni está respaldado por chris1111.
-> *Personal fork with changes to the driver (1.1.2-tr.1) and the RTLWiFiBar menu bar app (8.8.4-tr.2). English summary below.*
+> Fork personal de [chris1111/macOS-RTL-WIFI](https://github.com/chris1111/macOS-RTL-WIFI) con cambios en el **driver** (`1.1.2-tr.5`) y en la **app de la barra de menús RTLWiFiBar** (`8.8.4-tr.2`). No es un proyecto oficial ni está respaldado por chris1111.
+> *Personal fork with changes to the driver (1.1.2-tr.5) and the RTLWiFiBar menu bar app (8.8.4-tr.2). English summary below.*
 
 ### Para qué equipos y adaptadores
 - **Adaptadores Wi-Fi USB de Realtek** soportados por macOS-RTL-WIFI 1.1.2 (263 IDs USB). No sirve para tarjetas internas PCIe/M.2 ni para otras marcas.
@@ -21,10 +21,18 @@
 
 Los cambios del driver están en la capa común (la unión a la red), no en el código de cada chip, así que aplican a todas las familias; solo se probaron con el Archer T3U. Con adaptadores de solo 2.4 GHz igual sirve elegir el punto de acceso, pero "Preferir 5 GHz" no hace nada.
 
-### Qué cambia en el driver (1.1.2-tr.1)
+### Qué cambia en el driver (desde 1.1.2-tr.1)
 - **Unirse al punto de acceso elegido:** OID nuevo `0x0D01011A` con el BSSID; el driver va al canal de ese AP y se asocia solo a él (`IEEE80211_F_DESBSSID`). El original elige siempre el AP con más señal de la red, casi siempre uno de 2.4 GHz.
 - **Seguro:** si el AP elegido no está en la última búsqueda, se une por nombre como antes; nunca queda buscando un AP que no existe.
 - **Compatible:** la app original funciona igual con este driver, y esta app funciona con el driver original (sin la elección de AP).
+
+### Velocidad en RTL8822BU / RTL8812BU (1.1.2-tr.2 a tr.5)
+Solo para la familia 8822B (Archer T3U/T4U y similares); los demás chips no cambian. Medido con un Archer T3U en USB 2.0 a −50 dBm: **bajada de ~30 a ~95 Mbps**.
+- **802.11ac a 40/80 MHz** en canales de 5 GHz no DFS (36-48 y 149-161); en DFS sigue a 20 MHz. Si falla el cambio de ancho, vuelve solo a 20 MHz. (tr.2)
+- **Buffer de recepción USB de 32 KiB** para 8821CU/8822BU/8822CU, como Linux rtw88: los agregados de más de 16 KiB se partían y se perdían frames. (tr.3)
+- **A-MPDU al transmitir** (Block Ack por TID), como Linux rtw88. (tr.4)
+- **LDPC y STBC al recibir** y agregados VHT de hasta 1 MiB: el AP manda con modulaciones más altas. Es el cambio que más subió la velocidad. (tr.5)
+- Diagnósticos de tasas VHT de recepción también para los chips rtw88 (`ioreg -rc RtWlanU`).
 
 ### Qué cambia en la app (8.8.4-tr.2)
 - **Lista estilo macOS:** `Red   5 GHz · CH 44   [candado] [señal]`, con los íconos del sistema; el canal distingue los AP de una misma red.
@@ -46,7 +54,7 @@ Para volver al original, reinstala el paquete de chris1111.
 `./Create_Build.tool` (necesita Xcode). Sin Xcode: la app compila con las Command Line Tools (pasos de la sección [3/3] del script) y el driver con `scripts/build_kext_sin_xcode.sh <carpeta>`. Si existe en el Llavero un certificado de firma "RTLWiFiBar Local Signing" la app se firma con él; si no, ad-hoc.
 
 ### English summary
-Driver 1.1.2-tr.1: joins the access point you pick (new BSSID OID, `IEEE80211_F_DESBSSID`), falls back to joining by name when that AP is not in the last scan; stays compatible with the stock app. App 8.8.4-tr.2: macOS-style list with band, channel, lock and signal glyphs; pick a specific AP (sweeps first when the driver does not know it); "Prefer 5 GHz" (on by default) and the picked AP are used by auto-rejoin and Reconnect; real rescan while connected; clearer connect/disconnect labels; switch networks without forgetting; optional pause while a cable is connected; passwords in the Keychain. Same adapters as macOS-RTL-WIFI 1.1.2 (Realtek USB, Intel macOS 11-26); tested with an Archer T3U (RTL8812BU).
+Driver 1.1.2-tr.1+: joins the access point you pick (new BSSID OID, `IEEE80211_F_DESBSSID`), falls back to joining by name when that AP is not in the last scan; stays compatible with the stock app. App 8.8.4-tr.2: macOS-style list with band, channel, lock and signal glyphs; pick a specific AP (sweeps first when the driver does not know it); "Prefer 5 GHz" (on by default) and the picked AP are used by auto-rejoin and Reconnect; real rescan while connected; clearer connect/disconnect labels; switch networks without forgetting; optional pause while a cable is connected; passwords in the Keychain. Driver 1.1.2-tr.2 to tr.5 (RTL8822BU/8812BU only): 802.11ac 40/80 MHz on non-DFS 5 GHz, 32 KiB USB RX buffer, TX A-MPDU, RX LDPC/STBC and 1 MiB VHT A-MPDU; downlink went from ~30 to ~95 Mbps on an Archer T3U over USB 2.0. Same adapters as macOS-RTL-WIFI 1.1.2 (Realtek USB, Intel macOS 11-26); tested with an Archer T3U (RTL8812BU).
 
 Licencia / License: GPL-2.0, como el proyecto original. Créditos del driver y de la app base: chris1111 y los autores listados en `CREDITS.md`.
 

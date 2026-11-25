@@ -18,6 +18,16 @@ int RTWUSBController::ampduTXStart(ieee80211com*ic,ieee80211_node*ni,uint8_t tid
     if(s->is8192FUFamily())return ampdu8192FUTXStart(ic,ni,tid);
     if(s->is8812Family())return ampdu8812TXStart(ic,ni,tid);
     const auto&ba=ni->ni_tx_ba[tid];
+    if(s->is88Family()){
+        /* mejoras (1.1.2-tr.4): rtw88 needs no per-agreement register write; each
+         * descriptor reads the live BA (send88Frame). Accept only the protected,
+         * firmware-rated HT/VHT link to our AP, like the 8812/8814 paths. */
+        if(tid>=8||!s->uses88FirmwareRate()||!s->r88Rates_.rates.ht||!(ni->ni_flags&IEEE80211_NODE_HT)||
+           !s->authorized()||ni!=ic->ic_bss||(ic->ic_tid_noack&(1U<<tid))||
+           !(ic->ic_flags&IEEE80211_F_RSNON)||!(ni->ni_rsnprotos&IEEE80211_PROTO_RSN)||
+           ba.ba_winsize<1||ba.ba_winsize>IEEE80211_BA_MAX_WINSZ)return EINVAL;
+        return 0;
+    }
     if(s->family_==RTW_WIFI_RTL8814AU){
         if(tid>=8||!s->uses8814FirmwareRate()||!s->acRateConfig_.ht||!(ni->ni_flags&IEEE80211_NODE_HT)||
            !s->authorized()||ni!=ic->ic_bss||!s->present_||s->usbError_!=kIOReturnSuccess||

@@ -5,7 +5,7 @@ set -euo pipefail
 ROOT="$HOME/Documents/macOS-RTL-WIFI"
 OUT="$1"; mkdir -p "$OUT/obj"
 SDK="$(xcrun --sdk macosx --show-sdk-path)"; K="$SDK/System/Library/Frameworks/Kernel.framework/Headers"
-CCKEXT=/Library/Developer/CommandLineTools/usr/lib/clang/17/lib/darwin/libclang_rt.cc_kext.a
+CCKEXT="$(clang -print-resource-dir)/lib/darwin/libclang_rt.cc_kext.a"
 cd "$ROOT"
 SRCS=$(python3 - <<'PY'
 import re,os

@@ -35,7 +35,7 @@ void RTWUSBController::observeReceivedRate(const rtw_rx_packet &p) {
             else if(p.bandwidth_code==1)++perfDiag_.rxHT40Packets;
             else ++perfDiag_.rxHTUnknownBWPackets;
         }
-    }else if(is8812Family()&&p.rate_index>=44&&p.rate_index<64){
+    }else if((is8812Family()||is88Family())&&p.rate_index>=44&&p.rate_index<64){
         const unsigned index=p.rate_index-44;
         ++perfDiag_.rxVHTPackets[index];perfDiag_.rxVHTBytes[index]+=p.mpdu_length;
         if(p.bandwidth_code==0)++perfDiag_.rxVHT20Packets;

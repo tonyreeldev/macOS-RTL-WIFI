@@ -992,16 +992,19 @@ void RTWUSBController::publishRateControlDiagnostics() {
     publishDiagnosticCounter("RTWDiagTXRate500Kbps",selected);
     const auto* hwRate=uses88FirmwareRate()?&r88Rates_.rates:uses8814FirmwareRate()?&acRateConfig_:nullptr;
     const bool acHT=hwRate&&hwRate->ht,auHT=uses8812HighThroughput();
-    const bool auVHT=auHT&&auRateConfig_.vht;
+    const bool auVHT=(auHT&&auRateConfig_.vht)||(uses88FirmwareRate()&&r88Rates_.vht);
+    const unsigned w88=uses88FirmwareRate()?(r88Rates_.width_code==2?80U:r88Rates_.width_code==1?40U:20U):20U;
     const bool duHT=uses8192DUFirmwareRate()&&duMAC_.rates.ht,fuHT=uses8192FUHighThroughput(),buHT=uses8710BUHighThroughput(),r23HT=uses8723FirmwareRate()&&(r23Rates_.mask&0xff000U);
     const bool htNegotiated=usesFirmwareRate()||uses8188FirmwareRate()||acHT||auHT||duHT||fuHT||buHT||r23HT;
     publishDiagnosticCounter("RTWDiagHTNegotiated",(uint64_t)htNegotiated);
     publishDiagnosticCounter("RTWDiagVHTNegotiated",(uint64_t)auVHT);
     publishDiagnosticCounter("RTWDiagHTRateMask",htNegotiated?(uint64_t)(r23HT?r23Rates_.mask:buHT?buRate_.mask:fuHT?fuRate_.mask:duHT?duMAC_.rates.mask:auHT?auRateConfig_.mask:acHT?hwRate->mask:core_.rate_config.rate_mask):0);
-    publishDiagnosticCounter("RTWDiagHTSGI20Negotiated",(uint64_t)((usesFirmwareRate()&&core_.rate_config.sgi20)||(uses8188FirmwareRate()&&core_.rate_config.sgi20)||(r23HT&&r23Rates_.sgi)||(buHT&&buRate_.width_mhz==20&&buRate_.sgi)||(fuHT&&fuRate_.width_mhz==20&&fuRate_.sgi)||(duHT&&duMAC_.rates.sgi20)||(acHT&&hwRate->sgi20)||(auHT&&auRateConfig_.bandwidth_mhz==20&&auRateConfig_.short_gi)));
-    publishDiagnosticCounter("RTWDiagHTSGI40Negotiated",(uint64_t)((usesFirmwareRate()&&core_.rate_config.sgi40)||(buHT&&buRate_.width_mhz==40&&buRate_.sgi)||(fuHT&&fuRate_.width_mhz==40&&fuRate_.sgi)||(auHT&&auRateConfig_.bandwidth_mhz==40&&auRateConfig_.short_gi)));
-    publishDiagnosticCounter("RTWDiagVHTSGI80Negotiated",(uint64_t)(auVHT&&auRateConfig_.bandwidth_mhz==80&&auRateConfig_.short_gi));
-    publishDiagnosticCounter("RTWDiagHTChannelWidthMHz",(uint64_t)(r23HT?20:buHT?buRate_.width_mhz:fuHT?fuRate_.width_mhz:duHT?20:auHT?auRateConfig_.bandwidth_mhz:acHT?20:uses8188FirmwareRate()?20:usesFirmwareRate()?(core_.rate_config.bw40?40:20):0));
+    publishDiagnosticCounter("RTWDiagHTSGI20Negotiated",(uint64_t)((usesFirmwareRate()&&core_.rate_config.sgi20)||(uses8188FirmwareRate()&&core_.rate_config.sgi20)||(r23HT&&r23Rates_.sgi)||(buHT&&buRate_.width_mhz==20&&buRate_.sgi)||(fuHT&&fuRate_.width_mhz==20&&fuRate_.sgi)||(duHT&&duMAC_.rates.sgi20)||(acHT&&hwRate->sgi20&&w88==20)||(auHT&&auRateConfig_.bandwidth_mhz==20&&auRateConfig_.short_gi)));
+    publishDiagnosticCounter("RTWDiagHTSGI40Negotiated",(uint64_t)((usesFirmwareRate()&&core_.rate_config.sgi40)||(buHT&&buRate_.width_mhz==40&&buRate_.sgi)||(fuHT&&fuRate_.width_mhz==40&&fuRate_.sgi)||(auHT&&auRateConfig_.bandwidth_mhz==40&&auRateConfig_.short_gi)||(acHT&&w88==40&&hwRate->sgi20)));
+    publishDiagnosticCounter("RTWDiagVHTSGI80Negotiated",(uint64_t)((auHT&&auRateConfig_.vht&&auRateConfig_.bandwidth_mhz==80&&auRateConfig_.short_gi)||(acHT&&w88==80&&hwRate->sgi20)));
+    publishDiagnosticCounter("RTWDiag88WideFallbacks",r88WideFallbacks_);
+    publishDiagnosticCounter("RTWDiag88CenterChannel",r88Center_);
+    publishDiagnosticCounter("RTWDiagHTChannelWidthMHz",(uint64_t)(r23HT?20:buHT?buRate_.width_mhz:fuHT?fuRate_.width_mhz:duHT?20:auHT?auRateConfig_.bandwidth_mhz:acHT?w88:uses8188FirmwareRate()?20:usesFirmwareRate()?(core_.rate_config.bw40?40:20):0));
     publishDiagnosticCounter("RTWDiagHTTXStreams",htNegotiated?(uint64_t)(r23HT||buHT?1:fuHT?((fuRate_.mask&0x0ff00000U)?2:1):duHT?((duMAC_.rates.mask&0x0ff00000U)?2:1):auHT?auRateConfig_.streams:acHT?hwRate->tx_streams:core_.rate_config.tx_streams):0);
     publishDiagnosticCounter("RTWDiagHTRAID",htNegotiated?(uint64_t)(r23HT?r23Rates_.raid:buHT?buRate_.rate_id:fuHT?fuRate_.rate_id:duHT?duMAC_.rates.raid:auHT?auRateConfig_.rate_id:acHT?hwRate->rate_id:core_.rate_config.raid):0);
     publishDiagnosticCounter("RTWDiagHTFWRateSubmitted",txHTPackets_);
@@ -1401,7 +1404,7 @@ void RTWUSBController::receive(const uint8_t*bytes,size_t length) {
         const auto&p=frame.payload;
         if(reportType){++rxDiag_.c2h;if(reportType==7)handle8723C2H(p.mpdu,p.mpdu_length);else if(reportType==6)handle88C2H(p.mpdu,p.mpdu_length);else if(reportType==5){if(is8192FUFamily())handle8192FUC2H(p.mpdu,p.mpdu_length);else if(is8710BUFamily())handle8710BUC2H(p.mpdu,p.mpdu_length);else handle8812C2H(p.mpdu,p.mpdu_length);}else if(reportType==4)handle8814C2H(p.mpdu,p.mpdu_length);else if(reportType==1)handleTxReport(p.mpdu,p.mpdu_length);continue;}
         uint64_t*drop=nullptr;
-        if((is8723Family()&&(p.rate_index>=20||(p.rate_index>=12&&(!uses8723FirmwareRate()||!(r23Rates_.mask&0xff000U)||p.bandwidth_code))))||(is8710BUFamily()&&!accepts8710BUReceiveRate(p))||(is8192FUFamily()&&!accepts8192FUReceiveRate(p))||(family_==RTW_WIFI_RTL8192DU&&p.rate_index>=12U+8U*core_.nrxchains)||(is8812Family()&&!accepts8812ReceiveRate(p))||(is88Family()&&p.rate_index>=12U+8U*core_.nrxchains)||(family_==RTW_WIFI_RTL8188EU&&p.rate_index>=12U+8U*core_.nrxchains)||(family_==RTW_WIFI_RTL8814AU&&p.rate_index>27)||
+        if((is8723Family()&&(p.rate_index>=20||(p.rate_index>=12&&(!uses8723FirmwareRate()||!(r23Rates_.mask&0xff000U)||p.bandwidth_code))))||(is8710BUFamily()&&!accepts8710BUReceiveRate(p))||(is8192FUFamily()&&!accepts8192FUReceiveRate(p))||(family_==RTW_WIFI_RTL8192DU&&p.rate_index>=12U+8U*core_.nrxchains)||(is8812Family()&&!accepts8812ReceiveRate(p))||(is88Family()&&!accepts88ReceiveRate(p))||(family_==RTW_WIFI_RTL8188EU&&p.rate_index>=12U+8U*core_.nrxchains)||(family_==RTW_WIFI_RTL8814AU&&p.rate_index>27)||
            (family_!=RTW_WIFI_RTL8192EU&&family_!=RTW_WIFI_RTL8188EU&&family_!=RTW_WIFI_RTL8814AU&&!is88Family()&&!is8812Family()&&family_!=RTW_WIFI_RTL8192DU&&family_!=RTW_WIFI_RTL8192FU&&family_!=RTW_WIFI_RTL8710BU&&family_!=RTW_WIFI_RTL8723BU&&p.rate_index>=12))drop=&rxDiag_.invalidFrameDrops;
         else if(p.crc_error)drop=&rxDiag_.crcDrops;
         else if(p.icv_error)drop=&rxDiag_.icvDrops;
